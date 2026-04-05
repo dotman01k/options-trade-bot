@@ -8,7 +8,7 @@ import yfinance as yf
 
 st.set_page_config(page_title="Beginner Options Dashboard", page_icon="📈", layout="wide")
 
-APP_VERSION = "v10 beginner dashboard + market scanner"
+APP_VERSION = "v11 beginner dashboard + market scanner + possible earnings"
 
 st.markdown(
     """
@@ -58,28 +58,28 @@ st.markdown(
         border: 1px solid #16a34a;
         border-radius: 12px;
         padding: 16px;
-        min-height: 280px;
+        min-height: 320px;
     }
     .signal-card-buy {
         background: #3b2f00;
         border: 1px solid #facc15;
         border-radius: 12px;
         padding: 16px;
-        min-height: 280px;
+        min-height: 320px;
     }
     .signal-card-watch {
         background: #1f2937;
         border: 1px solid #64748b;
         border-radius: 12px;
         padding: 16px;
-        min-height: 280px;
+        min-height: 320px;
     }
     .signal-card-no {
         background: #3b0a0a;
         border: 1px solid #ef4444;
         border-radius: 12px;
         padding: 16px;
-        min-height: 280px;
+        min-height: 320px;
     }
     .card-title {
         color: white;
@@ -331,6 +331,8 @@ def add_trade_plan(df: pd.DataFrame):
         df["reward_per_contract"] / df["risk_per_contract"],
         0,
     ).round(2)
+    df["possible_earning"] = (df["reward_per_contract"] * df["contracts"]).round(2)
+    df["possible_loss"] = (df["risk_per_contract"] * df["contracts"]).round(2)
     return df
 
 
@@ -490,6 +492,8 @@ def render_trade_card(title: str, row):
                 <div><strong>Risk / Reward:</strong> {row['rr_ratio']:.2f}</div>
                 <div><strong>Contracts you can afford:</strong> {int(row['contracts'])}</div>
                 <div><strong>Total estimated cost:</strong> ${row['position_cost']:.2f}</div>
+                <div><strong>Possible Profit:</strong> ${row['possible_earning']:.2f}</div>
+                <div><strong>Possible Loss:</strong> ${row['possible_loss']:.2f}</div>
                 <div><strong>Why:</strong> {row['reason']}</div>
             </div>
         </div>
@@ -532,6 +536,8 @@ def style_table(df: pd.DataFrame):
                 "Win %": "{:.1f}%",
                 "Confidence": "{:.1f}",
                 "Total Cost": "${:.2f}",
+                "Possible Profit": "${:.2f}",
+                "Possible Loss": "${:.2f}",
                 "Capital Used %": "{:.1f}%",
                 "R/R": "{:.2f}",
             }
@@ -566,6 +572,8 @@ def show_table(df: pd.DataFrame, title: str):
             "confidence",
             "contracts",
             "position_cost",
+            "possible_earning",
+            "possible_loss",
             "capital_used_pct",
             "rr_ratio",
             "reason",
@@ -592,6 +600,8 @@ def show_table(df: pd.DataFrame, title: str):
         "Confidence",
         "Contracts",
         "Total Cost",
+        "Possible Profit",
+        "Possible Loss",
         "Capital Used %",
         "R/R",
         "Why",
@@ -880,6 +890,8 @@ with page2:
                     "target_price",
                     "contracts",
                     "position_cost",
+                    "possible_earning",
+                    "possible_loss",
                     "rr_ratio",
                     "reason",
                 ]
@@ -901,6 +913,8 @@ with page2:
                 "Target",
                 "Contracts",
                 "Total Cost",
+                "Possible Profit",
+                "Possible Loss",
                 "R/R",
                 "Why",
             ]
