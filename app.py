@@ -5,98 +5,98 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 
-st.set_page_config(page_title="Live Options Scanner", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Options Trade Dashboard", page_icon="📈", layout="wide")
+
+APP_VERSION = "v4 smart dashboard"
 
 st.markdown(
     """
     <style>
     .main {
-        background: linear-gradient(180deg, #0f172a 0%, #111827 45%, #172554 100%);
+        background-color: #0b0f19;
     }
     .block-container {
-        padding-top: 1.2rem;
+        padding-top: 1rem;
         padding-bottom: 2rem;
     }
     .hero-box {
-        background: linear-gradient(135deg, rgba(59,130,246,.22), rgba(168,85,247,.18));
-        border: 1px solid rgba(255,255,255,.10);
-        border-radius: 18px;
-        padding: 18px 20px;
+        background: #111827;
+        border: 1px solid #1f2937;
+        border-radius: 14px;
+        padding: 18px;
         margin-bottom: 14px;
-        box-shadow: 0 12px 30px rgba(0,0,0,.18);
     }
     .hero-title {
-        font-size: 2rem;
+        font-size: 1.9rem;
         font-weight: 800;
-        color: #f8fafc;
+        color: #ffffff;
         margin-bottom: 4px;
     }
     .hero-subtitle {
-        color: #cbd5e1;
-        font-size: 0.98rem;
+        color: #9ca3af;
+        font-size: 0.95rem;
     }
-    .stat-card {
-        background: rgba(255,255,255,.06);
-        border: 1px solid rgba(255,255,255,.08);
-        border-radius: 18px;
-        padding: 14px 16px;
-        box-shadow: 0 10px 24px rgba(0,0,0,.15);
+    .metric-note {
+        color: #9ca3af;
+        font-size: 0.85rem;
     }
-    .stat-label {
+    div[data-testid="stMetric"] {
+        background: #111827;
+        border: 1px solid #1f2937;
+        border-radius: 12px;
+        padding: 10px;
+    }
+    .info-card {
+        background: #111827;
+        border: 1px solid #1f2937;
+        border-radius: 12px;
+        padding: 14px;
+    }
+    .info-label {
         color: #93c5fd;
-        font-size: 0.9rem;
-        margin-bottom: 6px;
+        font-size: 0.88rem;
+        margin-bottom: 4px;
     }
-    .stat-value {
-        color: white;
-        font-size: 1.5rem;
+    .info-value {
+        color: #ffffff;
+        font-size: 1.25rem;
         font-weight: 800;
     }
     .signal-card-buy {
-        background: linear-gradient(135deg, rgba(34,197,94,.22), rgba(22,163,74,.14));
-        border: 1px solid rgba(34,197,94,.35);
-        border-radius: 18px;
-        padding: 16px;
-        min-height: 150px;
+        background: #062e1f;
+        border: 1px solid #16a34a;
+        border-radius: 12px;
+        padding: 14px;
+        min-height: 170px;
     }
     .signal-card-watch {
-        background: linear-gradient(135deg, rgba(250,204,21,.22), rgba(245,158,11,.12));
-        border: 1px solid rgba(250,204,21,.35);
-        border-radius: 18px;
-        padding: 16px;
-        min-height: 150px;
+        background: #3b2f00;
+        border: 1px solid #facc15;
+        border-radius: 12px;
+        padding: 14px;
+        min-height: 170px;
     }
     .signal-card-avoid {
-        background: linear-gradient(135deg, rgba(248,113,113,.22), rgba(239,68,68,.12));
-        border: 1px solid rgba(248,113,113,.35);
-        border-radius: 18px;
-        padding: 16px;
-        min-height: 150px;
+        background: #3b0a0a;
+        border: 1px solid #ef4444;
+        border-radius: 12px;
+        padding: 14px;
+        min-height: 170px;
     }
     .card-title {
-        color: white;
-        font-size: 1.1rem;
+        color: #ffffff;
+        font-size: 1.05rem;
         font-weight: 800;
-        margin-bottom: 6px;
+        margin-bottom: 8px;
     }
     .card-main {
-        color: #e2e8f0;
-        font-size: 1rem;
-        line-height: 1.5;
+        color: #d1d5db;
+        font-size: 0.98rem;
+        line-height: 1.55;
     }
     .small-note {
-        color: #cbd5e1;
-        font-size: 0.88rem;
-    }
-    div[data-testid="stMetric"] {
-        background: rgba(255,255,255,.06);
-        border: 1px solid rgba(255,255,255,.08);
-        padding: 12px 14px;
-        border-radius: 18px;
-        box-shadow: 0 10px 22px rgba(0,0,0,.14);
-    }
-    div[data-testid="stTabs"] button {
-        font-weight: 700;
+        color: #9ca3af;
+        font-size: 0.85rem;
     }
     </style>
     """,
@@ -124,13 +124,13 @@ def normalize(series: pd.Series):
     return ((s - mn) / (mx - mn) * 100).round(2)
 
 
-def fetch_data(symbol):
+def fetch_data(symbol: str):
     ticker = yf.Ticker(symbol)
     expirations = list(ticker.options)
     return ticker, expirations
 
 
-def fetch_chain(symbol, expiration):
+def fetch_chain(symbol: str, expiration: str):
     ticker = yf.Ticker(symbol)
     chain = ticker.option_chain(expiration)
 
@@ -156,7 +156,26 @@ def get_underlying_price(ticker):
     return 0.0
 
 
-def clean_df(df, expiration, underlying_price):
+def get_trend_strength(ticker):
+    hist = ticker.history(period="5d", interval="1h")
+    if hist.empty or "Close" not in hist.columns:
+        return 50.0, "Neutral"
+
+    close = hist["Close"].dropna()
+    if len(close) < 21:
+        return 50.0, "Neutral"
+
+    ema9 = close.ewm(span=9).mean().iloc[-1]
+    ema21 = close.ewm(span=21).mean().iloc[-1]
+
+    if ema9 > ema21:
+        return 80.0, "Bullish"
+    if ema9 < ema21:
+        return 20.0, "Bearish"
+    return 50.0, "Neutral"
+
+
+def clean_df(df: pd.DataFrame, expiration: str, underlying_price: float):
     df = df.rename(
         columns={
             "contractSymbol": "symbol",
@@ -181,12 +200,14 @@ def clean_df(df, expiration, underlying_price):
     )
 
     df["spread"] = (df["ask"] - df["bid"]).clip(lower=0)
-    df["spread_pct"] = np.where(df["ask"] > 0, df["spread"] / df["ask"] * 100, 100)
+    df["spread_pct"] = np.where(df["ask"] > 0, df["spread"] / df["ask"] * 100, 100).round(2)
+
     df["distance_from_spot_pct"] = np.where(
         underlying_price > 0,
         ((df["strike"] - underlying_price).abs() / underlying_price) * 100,
         999.0,
     ).round(2)
+
     df["atm_flag"] = np.where(df["distance_from_spot_pct"] <= 1.0, "ATM", "")
 
     midpoint = underlying_price if underlying_price > 0 else (df["strike"].median() if not df.empty else 0)
@@ -194,13 +215,13 @@ def clean_df(df, expiration, underlying_price):
     scaled = 1 - normalize(dist) / 100
     scaled = scaled.clip(0.05, 0.95)
 
-    df["delta"] = np.where(df["option_type"] == "Call", scaled, -scaled)
+    df["delta"] = np.where(df["option_type"] == "Call", scaled, -scaled).round(2)
     df["notional"] = (df["mid"] * 100).round(2)
 
     return df
 
 
-def score(df, option_type):
+def score(df: pd.DataFrame, option_type: str, trend_strength: float):
     side = df[df["option_type"] == option_type].copy()
 
     if side.empty:
@@ -227,41 +248,48 @@ def score(df, option_type):
         + atm_fit * 0.20
     ).clip(5, 95).round(1)
 
+    trend_boost = trend_strength if option_type == "Call" else 100 - trend_strength
+    side["confidence"] = (
+        side["score"] * 0.40
+        + side["win_probability"] * 0.30
+        + trend_boost * 0.30
+    ).clip(5, 100).round(1)
+
     side["signal"] = np.select(
         [
-            (side["score"] >= 78) & (side["win_probability"] >= 70) & (side["spread_pct"] <= 12),
-            (side["score"] >= 65) & (side["win_probability"] >= 58) & (side["spread_pct"] <= 18),
+            side["confidence"] >= 75,
+            side["confidence"] >= 60,
         ],
-        ["BUY", "WATCH"],
+        ["STRONG BUY", "BUY"],
         default="AVOID",
     )
 
-    signal_order = {"BUY": 0, "WATCH": 1, "AVOID": 2}
+    signal_order = {"STRONG BUY": 0, "BUY": 1, "AVOID": 2}
     side["signal_rank"] = side["signal"].map(signal_order)
     side = side.sort_values(
-        ["signal_rank", "score", "volume", "open_interest"],
-        ascending=[True, False, False, False],
+        ["signal_rank", "confidence", "score", "volume", "open_interest"],
+        ascending=[True, False, False, False, False],
     )
     return side.drop(columns=["signal_rank"])
 
 
-def signal_card_class(signal):
-    if signal == "BUY":
+def signal_card_class(signal: str):
+    if signal == "STRONG BUY":
         return "signal-card-buy"
-    if signal == "WATCH":
+    if signal == "BUY":
         return "signal-card-watch"
     return "signal-card-avoid"
 
 
-def signal_badge(signal):
-    if signal == "BUY":
+def signal_badge(signal: str):
+    if signal == "STRONG BUY":
         return "🟢"
-    if signal == "WATCH":
+    if signal == "BUY":
         return "🟡"
     return "🔴"
 
 
-def render_idea_card(title, row):
+def render_idea_card(title: str, row):
     if row is None:
         st.info(f"No {title.lower()} matched your filters.")
         return
@@ -269,13 +297,15 @@ def render_idea_card(title, row):
     signal = row["signal"]
     card_class = signal_card_class(signal)
     badge = signal_badge(signal)
+
     st.markdown(
         f"""
         <div class="{card_class}">
             <div class="card-title">{title}</div>
             <div class="card-main">
-                <div style="font-size:1.1rem;font-weight:800;margin-bottom:6px;">{badge} {row['symbol']}</div>
+                <div style="font-size:1.1rem;font-weight:800;margin-bottom:8px;">{badge} {row['symbol']}</div>
                 <div><strong>Signal:</strong> {signal}</div>
+                <div><strong>Confidence:</strong> {row['confidence']:.1f}</div>
                 <div><strong>Score:</strong> {row['score']:.2f}</div>
                 <div><strong>Win %:</strong> {row['win_probability']:.1f}%</div>
                 <div><strong>Ask:</strong> ${row['ask']:.2f}</div>
@@ -288,11 +318,11 @@ def render_idea_card(title, row):
     )
 
 
-def style_signals(df):
+def style_signals(df: pd.DataFrame):
     def color_signal(val):
-        if val == "BUY":
+        if val == "STRONG BUY":
             return "background-color: rgba(0, 200, 0, 0.18); font-weight: 700;"
-        if val == "WATCH":
+        if val == "BUY":
             return "background-color: rgba(255, 193, 7, 0.22); font-weight: 700;"
         if val == "AVOID":
             return "background-color: rgba(255, 0, 0, 0.16); font-weight: 700;"
@@ -303,51 +333,56 @@ def style_signals(df):
             return "background-color: rgba(0, 123, 255, 0.18); font-weight: 700;"
         return ""
 
-    styled = (
+    return (
         df.style
         .map(color_signal, subset=["Signal"])
         .map(color_atm, subset=["ATM"])
-        .format({
-            "Bid": "${:.2f}",
-            "Ask": "${:.2f}",
-            "Mid": "${:.2f}",
-            "Spread %": "{:.2f}%",
-            "Delta": "{:.2f}",
-            "IV": "{:.2%}",
-            "Score": "{:.2f}",
-            "Win %": "{:.1f}%",
-            "Est. Cost": "${:.2f}",
-            "Distance %": "{:.2f}%",
-        })
+        .format(
+            {
+                "Bid": "${:.2f}",
+                "Ask": "${:.2f}",
+                "Mid": "${:.2f}",
+                "Spread %": "{:.2f}%",
+                "Delta": "{:.2f}",
+                "IV": "{:.2%}",
+                "Distance %": "{:.2f}%",
+                "Score": "{:.2f}",
+                "Win %": "{:.1f}%",
+                "Confidence": "{:.1f}",
+                "Est. Cost": "${:.2f}",
+            }
+        )
     )
-    return styled
 
 
-def show_table(df, title):
+def show_table(df: pd.DataFrame, title: str):
     st.subheader(title)
     if df.empty:
         st.info("No contracts matched your filters.")
         return
 
-    pretty = df[[
-        "signal",
-        "atm_flag",
-        "symbol",
-        "strike",
-        "expiration_date",
-        "bid",
-        "ask",
-        "mid",
-        "spread_pct",
-        "volume",
-        "open_interest",
-        "delta",
-        "iv",
-        "distance_from_spot_pct",
-        "score",
-        "win_probability",
-        "notional",
-    ]].copy()
+    pretty = df[
+        [
+            "signal",
+            "atm_flag",
+            "symbol",
+            "strike",
+            "expiration_date",
+            "bid",
+            "ask",
+            "mid",
+            "spread_pct",
+            "volume",
+            "open_interest",
+            "delta",
+            "iv",
+            "distance_from_spot_pct",
+            "score",
+            "win_probability",
+            "confidence",
+            "notional",
+        ]
+    ].copy()
 
     pretty.columns = [
         "Signal",
@@ -366,6 +401,7 @@ def show_table(df, title):
         "Distance %",
         "Score",
         "Win %",
+        "Confidence",
         "Est. Cost",
     ]
 
@@ -376,30 +412,38 @@ st.markdown(
     """
     <div class="hero-box">
         <div class="hero-title">📈 Options Trade Dashboard</div>
-        <div class="hero-subtitle">A more colorful and user friendly scanner for calls, puts, signals, ATM setups, and win probability.</div>
+        <div class="hero-subtitle">Smarter scanner with confidence score, ATM highlighting, and signal ranking.</div>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
-left_top, right_top = st.columns([1.5, 1])
+st.caption(APP_VERSION)
+
+left_top, right_top = st.columns([1.6, 1])
 with left_top:
     symbol = st.text_input("Ticker", "SPY").upper().strip()
 with right_top:
-    st.markdown("<div class='small-note' style='padding-top: 10px;'>Tip: Start with liquid tickers like SPY, QQQ, NVDA, AAPL, or TSLA.</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<div class='small-note' style='padding-top: 12px;'>Tip: liquid tickers usually give cleaner options data and tighter spreads.</div>",
+        unsafe_allow_html=True,
+    )
 
 st.markdown("### Scanner Filters")
-left_filter, right_filter = st.columns(2)
-with left_filter:
+f1, f2, f3 = st.columns(3)
+with f1:
     top_n = st.slider("Top contracts", 5, 25, 10)
+with f2:
     min_volume = st.number_input("Minimum volume", min_value=0, value=50, step=10)
-with right_filter:
+with f3:
     min_oi = st.number_input("Minimum open interest", min_value=0, value=100, step=50)
-    max_spread_pct = st.slider("Maximum spread %", 1, 50, 15)
+
+max_spread_pct = st.slider("Maximum spread %", 1, 50, 15)
 
 try:
     ticker, expirations = fetch_data(symbol)
     underlying_price = get_underlying_price(ticker)
+    trend_strength, trend_label = get_trend_strength(ticker)
 except Exception as e:
     st.error(f"Could not load market data for {symbol}: {e}")
     st.stop()
@@ -423,36 +467,50 @@ filtered = df[
     & (df["spread_pct"] <= max_spread_pct)
 ].copy()
 
-calls = score(filtered, "Call").head(top_n)
-puts = score(filtered, "Put").head(top_n)
+calls_scored = score(filtered, "Call", trend_strength)
+puts_scored = score(filtered, "Put", trend_strength)
+
+calls = calls_scored.head(top_n)
+puts = puts_scored.head(top_n)
+
+scored_all = pd.concat([calls_scored, puts_scored], ignore_index=True)
 
 m1, m2, m3, m4 = st.columns(4)
-atm_count = int((filtered["atm_flag"] == "ATM").sum()) if not filtered.empty else 0
-buy_count = int((pd.concat([calls, puts])["signal"] == "BUY").sum()) if (not calls.empty or not puts.empty) else 0
+atm_count = int((scored_all["atm_flag"] == "ATM").sum()) if not scored_all.empty else 0
+buy_count = int(scored_all["signal"].isin(["STRONG BUY", "BUY"]).sum()) if not scored_all.empty else 0
+
 m1.metric("Underlying", symbol)
 m2.metric("Spot Price", f"${underlying_price:,.2f}" if underlying_price else "N/A")
-m3.metric("ATM Contracts", f"{atm_count}")
-m4.metric("Buy Signals", f"{buy_count}")
+m3.metric("Trend Bias", trend_label)
+m4.metric("Actionable Signals", f"{buy_count}")
 
-stat1, stat2, stat3 = st.columns(3)
-with stat1:
-    st.markdown(f"<div class='stat-card'><div class='stat-label'>Top Expiration</div><div class='stat-value'>{expiry}</div></div>", unsafe_allow_html=True)
-with stat2:
-    top_call_score = f"{calls.iloc[0]['score']:.2f}" if not calls.empty else "N/A"
-    st.markdown(f"<div class='stat-card'><div class='stat-label'>Best Call Score</div><div class='stat-value'>{top_call_score}</div></div>", unsafe_allow_html=True)
-with stat3:
-    top_put_score = f"{puts.iloc[0]['score']:.2f}" if not puts.empty else "N/A"
-    st.markdown(f"<div class='stat-card'><div class='stat-label'>Best Put Score</div><div class='stat-value'>{top_put_score}</div></div>", unsafe_allow_html=True)
+i1, i2, i3 = st.columns(3)
+with i1:
+    st.markdown(
+        f"<div class='info-card'><div class='info-label'>Selected Expiration</div><div class='info-value'>{expiry}</div></div>",
+        unsafe_allow_html=True,
+    )
+with i2:
+    best_call_conf = f"{calls.iloc[0]['confidence']:.1f}" if not calls.empty else "N/A"
+    st.markdown(
+        f"<div class='info-card'><div class='info-label'>Best Call Confidence</div><div class='info-value'>{best_call_conf}</div></div>",
+        unsafe_allow_html=True,
+    )
+with i3:
+    best_put_conf = f"{puts.iloc[0]['confidence']:.1f}" if not puts.empty else "N/A"
+    st.markdown(
+        f"<div class='info-card'><div class='info-label'>Best Put Confidence</div><div class='info-value'>{best_put_conf}</div></div>",
+        unsafe_allow_html=True,
+    )
 
-col1, col2 = st.columns(2)
-with col1:
+c1, c2 = st.columns(2)
+with c1:
     render_idea_card("Best Call", calls.iloc[0] if not calls.empty else None)
-
-with col2:
+with c2:
     render_idea_card("Best Put", puts.iloc[0] if not puts.empty else None)
 
 st.info(
-    "Signal logic: BUY favors stronger liquidity, tighter spreads, near-ATM contracts, and delta close to the target. Win % is a model score, not a guaranteed outcome."
+    "Confidence combines contract quality, win model, and trend alignment. It is a model score for decision support, not a guarantee."
 )
 
 tab1, tab2, tab3 = st.tabs(["Top Calls", "Top Puts", "ATM Snapshot"])
@@ -464,9 +522,7 @@ with tab2:
     show_table(puts, f"Top Put Contracts for {symbol} {expiry}")
 
 with tab3:
-    scored_all = pd.concat([score(filtered, "Call"), score(filtered, "Put")], ignore_index=True)
     atm_df = scored_all[scored_all["atm_flag"] == "ATM"].copy()
-
     if atm_df.empty:
         st.info("No ATM contracts matched the current filters.")
     else:
