@@ -603,7 +603,7 @@ def show_table(df: pd.DataFrame, title: str):
 st.markdown(
     """
     <div class="hero-box">
-        <div class="hero-title">📈 Beginner Options Dashboard</div>
+        <div class="hero-title">📈 Dotun's Options Dashboard</div>
         <div class="hero-subtitle">A simple options scanner that explains whether a setup looks strong, weak, or not ready yet.</div>
     </div>
     """,
