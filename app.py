@@ -521,9 +521,7 @@ def style_table(df: pd.DataFrame):
         .map(color_atm, subset=["ATM"])
         .format(
             {
-                "Bid": "${:.2f}",
                 "Ask": "${:.2f}",
-                "Mid": "${:.2f}",
                 "Entry": "${:.2f}",
                 "Stop": "${:.2f}",
                 "Target": "${:.2f}",
@@ -694,22 +692,26 @@ m3.metric("Trend", stock_ctx["trend_label"])
 actionable_count = int(all_scored["signal"].isin(["STRONG BUY", "BUY"]).sum()) if not all_scored.empty else 0
 m4.metric("Good Setups", actionable_count)
 
+rsi_value = f"{stock_ctx['rsi']:.1f}" if stock_ctx["rsi"] is not None else "N/A"
+vwap_value = f"${stock_ctx['vwap']:.2f}" if stock_ctx["vwap"] is not None else "N/A"
+rel_vol_value = f"{stock_ctx['relative_volume']:.2f}x" if stock_ctx["relative_volume"] is not None else "N/A"
+support_value = f"${stock_ctx['support']:.2f}" if stock_ctx["support"] is not None else "N/A"
+resistance_value = f"${stock_ctx['resistance']:.2f}" if stock_ctx["resistance"] is not None else "N/A"
+
 i1, i2, i3, i4 = st.columns(4)
 with i1:
     st.markdown(
-        f"<div class='simple-card'><div class='simple-label'>RSI</div><div class='simple-value'>{stock_ctx['rsi']:.1f if stock_ctx['rsi'] is not None else 'N/A'}</div></div>",
+        f"<div class='simple-card'><div class='simple-label'>RSI</div><div class='simple-value'>{rsi_value}</div></div>",
         unsafe_allow_html=True,
     )
 with i2:
-    vwap_text = f"${stock_ctx['vwap']:.2f}" if stock_ctx["vwap"] is not None else "N/A"
     st.markdown(
-        f"<div class='simple-card'><div class='simple-label'>VWAP</div><div class='simple-value'>{vwap_text}</div></div>",
+        f"<div class='simple-card'><div class='simple-label'>VWAP</div><div class='simple-value'>{vwap_value}</div></div>",
         unsafe_allow_html=True,
     )
 with i3:
-    rel_vol_text = f"{stock_ctx['relative_volume']:.2f}x" if stock_ctx["relative_volume"] is not None else "N/A"
     st.markdown(
-        f"<div class='simple-card'><div class='simple-label'>Relative Volume</div><div class='simple-value'>{rel_vol_text}</div></div>",
+        f"<div class='simple-card'><div class='simple-label'>Relative Volume</div><div class='simple-value'>{rel_vol_value}</div></div>",
         unsafe_allow_html=True,
     )
 with i4:
@@ -720,15 +722,13 @@ with i4:
 
 j1, j2 = st.columns(2)
 with j1:
-    support_text = f"${stock_ctx['support']:.2f}" if stock_ctx["support"] is not None else "N/A"
     st.markdown(
-        f"<div class='simple-card'><div class='simple-label'>Support</div><div class='simple-value'>{support_text}</div></div>",
+        f"<div class='simple-card'><div class='simple-label'>Support</div><div class='simple-value'>{support_value}</div></div>",
         unsafe_allow_html=True,
     )
 with j2:
-    resistance_text = f"${stock_ctx['resistance']:.2f}" if stock_ctx["resistance"] is not None else "N/A"
     st.markdown(
-        f"<div class='simple-card'><div class='simple-label'>Resistance</div><div class='simple-value'>{resistance_text}</div></div>",
+        f"<div class='simple-card'><div class='simple-label'>Resistance</div><div class='simple-value'>{resistance_value}</div></div>",
         unsafe_allow_html=True,
     )
 
