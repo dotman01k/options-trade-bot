@@ -7,7 +7,7 @@ import yfinance as yf
 
 st.set_page_config(page_title="Options Trade Dashboard", page_icon="📈", layout="wide")
 
-APP_VERSION = "v4 smart dashboard"
+APP_VERSION = "v5 smart dashboard with position sizing"
 
 st.markdown(
     """
@@ -67,21 +67,21 @@ st.markdown(
         border: 1px solid #16a34a;
         border-radius: 12px;
         padding: 14px;
-        min-height: 170px;
+        min-height: 210px;
     }
     .signal-card-watch {
         background: #3b2f00;
         border: 1px solid #facc15;
         border-radius: 12px;
         padding: 14px;
-        min-height: 170px;
+        min-height: 210px;
     }
     .signal-card-avoid {
         background: #3b0a0a;
         border: 1px solid #ef4444;
         border-radius: 12px;
         padding: 14px;
-        min-height: 170px;
+        min-height: 210px;
     }
     .card-title {
         color: #ffffff;
@@ -122,6 +122,12 @@ def normalize(series: pd.Series):
     if math.isclose(mx, mn):
         return pd.Series([50.0] * len(s), index=s.index)
     return ((s - mn) / (mx - mn) * 100).round(2)
+
+
+def calculate_position_size(capital: float, option_price: float):
+    if option_price <= 0:
+        return 0
+    return int(capital // (option_price * 100))
 
 
 def fetch_data(symbol: str):
@@ -221,7 +227,7 @@ def clean_df(df: pd.DataFrame, expiration: str, underlying_price: float):
     return df
 
 
-def score(df: pd.DataFrame, option_type: str, trend_strength: float):
+def score(df: pd.DataFrame, option_type: str, trend_strength: float, capital: float):
     side = df[df["option_type"] == option_type].copy()
 
     if side.empty:
@@ -263,6 +269,14 @@ def score(df: pd.DataFrame, option_type: str, trend_strength: float):
         ["STRONG BUY", "BUY"],
         default="AVOID",
     )
+
+    side["contracts"] = side["ask"].apply(lambda x: calculate_position_size(capital, x))
+    side["position_cost"] = (side["contracts"] * side["ask"] * 100).round(2)
+    side["capital_used_pct"] = np.where(
+        capital > 0,
+        (side["position_cost"] / capital) * 100,
+        0,
+    ).round(1)
 
     signal_order = {"STRONG BUY": 0, "BUY": 1, "AVOID": 2}
     side["signal_rank"] = side["signal"].map(signal_order)
@@ -310,6 +324,9 @@ def render_idea_card(title: str, row):
                 <div><strong>Win %:</strong> {row['win_probability']:.1f}%</div>
                 <div><strong>Ask:</strong> ${row['ask']:.2f}</div>
                 <div><strong>Strike:</strong> ${row['strike']:.2f}</div>
+                <div><strong>Contracts:</strong> {int(row['contracts'])}</div>
+                <div><strong>Total Cost:</strong> ${row['position_cost']:.2f}</div>
+                <div><strong>Capital Used:</strong> {row['capital_used_pct']:.1f}%</div>
                 <div><strong>ATM:</strong> {row['atm_flag'] if row['atm_flag'] else 'No'}</div>
             </div>
         </div>
@@ -350,6 +367,8 @@ def style_signals(df: pd.DataFrame):
                 "Win %": "{:.1f}%",
                 "Confidence": "{:.1f}",
                 "Est. Cost": "${:.2f}",
+                "Total Cost": "${:.2f}",
+                "Capital Used %": "{:.1f}%",
             }
         )
     )
@@ -380,6 +399,9 @@ def show_table(df: pd.DataFrame, title: str):
             "score",
             "win_probability",
             "confidence",
+            "contracts",
+            "position_cost",
+            "capital_used_pct",
             "notional",
         ]
     ].copy()
@@ -402,6 +424,9 @@ def show_table(df: pd.DataFrame, title: str):
         "Score",
         "Win %",
         "Confidence",
+        "Contracts",
+        "Total Cost",
+        "Capital Used %",
         "Est. Cost",
     ]
 
@@ -412,7 +437,7 @@ st.markdown(
     """
     <div class="hero-box">
         <div class="hero-title">📈 Options Trade Dashboard</div>
-        <div class="hero-subtitle">Smarter scanner with confidence score, ATM highlighting, and signal ranking.</div>
+        <div class="hero-subtitle">Smarter scanner with confidence score, ATM highlighting, signal ranking, and position sizing.</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -439,6 +464,14 @@ with f3:
     min_oi = st.number_input("Minimum open interest", min_value=0, value=100, step=50)
 
 max_spread_pct = st.slider("Maximum spread %", 1, 50, 15)
+
+st.markdown("### 💰 Position Settings")
+capital = st.number_input(
+    "How much are you investing ($)",
+    min_value=100,
+    value=1000,
+    step=100,
+)
 
 try:
     ticker, expirations = fetch_data(symbol)
@@ -467,8 +500,8 @@ filtered = df[
     & (df["spread_pct"] <= max_spread_pct)
 ].copy()
 
-calls_scored = score(filtered, "Call", trend_strength)
-puts_scored = score(filtered, "Put", trend_strength)
+calls_scored = score(filtered, "Call", trend_strength, capital)
+puts_scored = score(filtered, "Put", trend_strength, capital)
 
 calls = calls_scored.head(top_n)
 puts = puts_scored.head(top_n)
@@ -510,7 +543,7 @@ with c2:
     render_idea_card("Best Put", puts.iloc[0] if not puts.empty else None)
 
 st.info(
-    "Confidence combines contract quality, win model, and trend alignment. It is a model score for decision support, not a guarantee."
+    "Confidence combines contract quality, win model, and trend alignment. Position sizing uses your investment amount and the option ask price. This is a decision support model, not a guarantee."
 )
 
 tab1, tab2, tab3 = st.tabs(["Top Calls", "Top Puts", "ATM Snapshot"])
