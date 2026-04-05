@@ -7,7 +7,7 @@ import yfinance as yf
 
 st.set_page_config(page_title="Options Trade Dashboard", page_icon="📈", layout="wide")
 
-APP_VERSION = "v6 smart dashboard with ticker validation"
+APP_VERSION = "v7 smart dashboard with trend, trade plan, and no-trade logic"
 
 st.markdown(
     """
@@ -36,10 +36,6 @@ st.markdown(
         color: #9ca3af;
         font-size: 0.95rem;
     }
-    .metric-note {
-        color: #9ca3af;
-        font-size: 0.85rem;
-    }
     div[data-testid="stMetric"] {
         background: #111827;
         border: 1px solid #1f2937;
@@ -67,21 +63,21 @@ st.markdown(
         border: 1px solid #16a34a;
         border-radius: 12px;
         padding: 14px;
-        min-height: 210px;
+        min-height: 280px;
     }
     .signal-card-watch {
         background: #3b2f00;
         border: 1px solid #facc15;
         border-radius: 12px;
         padding: 14px;
-        min-height: 210px;
+        min-height: 280px;
     }
     .signal-card-avoid {
         background: #3b0a0a;
         border: 1px solid #ef4444;
         border-radius: 12px;
         padding: 14px;
-        min-height: 210px;
+        min-height: 280px;
     }
     .card-title {
         color: #ffffff;
@@ -150,14 +146,16 @@ def clean_symbol(user_input: str):
         "NETFLIX": "NFLX",
         "NFLX": "NFLX",
         "SPY": "SPY",
+        "S&P500": "SPY",
+        "S&P 500": "SPY",
+        "SP500": "SPY",
+        "S&P": "SPY",
         "QQQ": "QQQ",
-        "AMD": "AMD",
         "AMD": "AMD",
         "COIN": "COIN",
         "PALANTIR": "PLTR",
         "PLTR": "PLTR",
     }
-
     raw = (user_input or "").upper().strip()
     cleaned = raw.replace("$", "").strip()
     symbol = name_map.get(cleaned, cleaned)
@@ -204,23 +202,56 @@ def get_underlying_price(ticker):
     return 0.0
 
 
-def get_trend_strength(ticker):
-    hist = ticker.history(period="5d", interval="1h")
+def get_trend_context(ticker):
+    hist = ticker.history(period="20d", interval="1h")
     if hist.empty or "Close" not in hist.columns:
-        return 50.0, "Neutral"
+        return {
+            "trend_strength": 50.0,
+            "trend_label": "Neutral",
+            "ema9": None,
+            "ema21": None,
+            "support": None,
+            "resistance": None,
+        }
 
     close = hist["Close"].dropna()
+    low = hist["Low"].dropna() if "Low" in hist.columns else pd.Series(dtype=float)
+    high = hist["High"].dropna() if "High" in hist.columns else pd.Series(dtype=float)
+
     if len(close) < 21:
-        return 50.0, "Neutral"
+        return {
+            "trend_strength": 50.0,
+            "trend_label": "Neutral",
+            "ema9": None,
+            "ema21": None,
+            "support": None,
+            "resistance": None,
+        }
 
     ema9 = close.ewm(span=9).mean().iloc[-1]
     ema21 = close.ewm(span=21).mean().iloc[-1]
 
     if ema9 > ema21:
-        return 80.0, "Bullish"
-    if ema9 < ema21:
-        return 20.0, "Bearish"
-    return 50.0, "Neutral"
+        trend_strength = 80.0
+        trend_label = "Bullish"
+    elif ema9 < ema21:
+        trend_strength = 20.0
+        trend_label = "Bearish"
+    else:
+        trend_strength = 50.0
+        trend_label = "Neutral"
+
+    support = low.tail(20).min() if not low.empty else None
+    resistance = high.tail(20).max() if not high.empty else None
+
+    return {
+        "trend_strength": trend_strength,
+        "trend_label": trend_label,
+        "ema9": float(ema9),
+        "ema21": float(ema21),
+        "support": float(support) if support is not None else None,
+        "resistance": float(resistance) if resistance is not None else None,
+    }
 
 
 def clean_df(df: pd.DataFrame, expiration: str, underlying_price: float):
@@ -269,7 +300,26 @@ def clean_df(df: pd.DataFrame, expiration: str, underlying_price: float):
     return df
 
 
-def score(df: pd.DataFrame, option_type: str, trend_strength: float, capital: float):
+def add_trade_plan(side: pd.DataFrame):
+    side["entry_price"] = side["ask"].round(2)
+    side["stop_price"] = (side["ask"] * 0.75).round(2)
+    side["target_price"] = (side["ask"] * 1.40).round(2)
+
+    risk_per_contract = (side["entry_price"] - side["stop_price"]) * 100
+    reward_per_contract = (side["target_price"] - side["entry_price"]) * 100
+
+    side["risk_per_contract"] = risk_per_contract.round(2)
+    side["reward_per_contract"] = reward_per_contract.round(2)
+    side["rr_ratio"] = np.where(
+        side["risk_per_contract"] > 0,
+        side["reward_per_contract"] / side["risk_per_contract"],
+        0,
+    ).round(2)
+
+    return side
+
+
+def score(df: pd.DataFrame, option_type: str, trend_strength: float, trend_label: str, capital: float):
     side = df[df["option_type"] == option_type].copy()
 
     if side.empty:
@@ -303,10 +353,17 @@ def score(df: pd.DataFrame, option_type: str, trend_strength: float, capital: fl
         + trend_boost * 0.30
     ).clip(5, 100).round(1)
 
+    side["trend_ok"] = np.where(
+        ((option_type == "Call") and (trend_label == "Bullish"))
+        or ((option_type == "Put") and (trend_label == "Bearish")),
+        True,
+        False,
+    )
+
     side["signal"] = np.select(
         [
-            side["confidence"] >= 75,
-            side["confidence"] >= 60,
+            (side["confidence"] >= 78) & (side["trend_ok"]) & (side["spread_pct"] <= 12),
+            (side["confidence"] >= 62) & (side["spread_pct"] <= 18),
         ],
         ["STRONG BUY", "BUY"],
         default="AVOID",
@@ -319,6 +376,20 @@ def score(df: pd.DataFrame, option_type: str, trend_strength: float, capital: fl
         (side["position_cost"] / capital) * 100,
         0,
     ).round(1)
+
+    side = add_trade_plan(side)
+
+    side["reason"] = np.select(
+        [
+            side["signal"] == "STRONG BUY",
+            side["signal"] == "BUY",
+        ],
+        [
+            "Trend aligned, strong confidence, tight spread, good liquidity",
+            "Decent setup, but weaker than top tier",
+        ],
+        default="Weak setup or trend not aligned",
+    )
 
     signal_order = {"STRONG BUY": 0, "BUY": 1, "AVOID": 2}
     side["signal_rank"] = side["signal"].map(signal_order)
@@ -364,12 +435,13 @@ def render_idea_card(title: str, row):
                 <div><strong>Confidence:</strong> {row['confidence']:.1f}</div>
                 <div><strong>Score:</strong> {row['score']:.2f}</div>
                 <div><strong>Win %:</strong> {row['win_probability']:.1f}%</div>
-                <div><strong>Ask:</strong> ${row['ask']:.2f}</div>
-                <div><strong>Strike:</strong> ${row['strike']:.2f}</div>
+                <div><strong>Entry:</strong> ${row['entry_price']:.2f}</div>
+                <div><strong>Stop:</strong> ${row['stop_price']:.2f}</div>
+                <div><strong>Target:</strong> ${row['target_price']:.2f}</div>
+                <div><strong>R/R:</strong> {row['rr_ratio']:.2f}</div>
                 <div><strong>Contracts:</strong> {int(row['contracts'])}</div>
                 <div><strong>Total Cost:</strong> ${row['position_cost']:.2f}</div>
-                <div><strong>Capital Used:</strong> {row['capital_used_pct']:.1f}%</div>
-                <div><strong>ATM:</strong> {row['atm_flag'] if row['atm_flag'] else 'No'}</div>
+                <div><strong>Reason:</strong> {row['reason']}</div>
             </div>
         </div>
         """,
@@ -401,6 +473,9 @@ def style_signals(df: pd.DataFrame):
                 "Bid": "${:.2f}",
                 "Ask": "${:.2f}",
                 "Mid": "${:.2f}",
+                "Entry": "${:.2f}",
+                "Stop": "${:.2f}",
+                "Target": "${:.2f}",
                 "Spread %": "{:.2f}%",
                 "Delta": "{:.2f}",
                 "IV": "{:.2%}",
@@ -408,9 +483,12 @@ def style_signals(df: pd.DataFrame):
                 "Score": "{:.2f}",
                 "Win %": "{:.1f}%",
                 "Confidence": "{:.1f}",
-                "Est. Cost": "${:.2f}",
                 "Total Cost": "${:.2f}",
                 "Capital Used %": "{:.1f}%",
+                "Risk/Contract": "${:.2f}",
+                "Reward/Contract": "${:.2f}",
+                "R/R": "{:.2f}",
+                "Est. Cost": "${:.2f}",
             }
         )
     )
@@ -432,6 +510,9 @@ def show_table(df: pd.DataFrame, title: str):
             "bid",
             "ask",
             "mid",
+            "entry_price",
+            "stop_price",
+            "target_price",
             "spread_pct",
             "volume",
             "open_interest",
@@ -444,6 +525,10 @@ def show_table(df: pd.DataFrame, title: str):
             "contracts",
             "position_cost",
             "capital_used_pct",
+            "risk_per_contract",
+            "reward_per_contract",
+            "rr_ratio",
+            "reason",
             "notional",
         ]
     ].copy()
@@ -457,6 +542,9 @@ def show_table(df: pd.DataFrame, title: str):
         "Bid",
         "Ask",
         "Mid",
+        "Entry",
+        "Stop",
+        "Target",
         "Spread %",
         "Volume",
         "Open Interest",
@@ -469,6 +557,10 @@ def show_table(df: pd.DataFrame, title: str):
         "Contracts",
         "Total Cost",
         "Capital Used %",
+        "Risk/Contract",
+        "Reward/Contract",
+        "R/R",
+        "Reason",
         "Est. Cost",
     ]
 
@@ -479,7 +571,7 @@ st.markdown(
     """
     <div class="hero-box">
         <div class="hero-title">📈 Options Trade Dashboard</div>
-        <div class="hero-subtitle">Smarter scanner with confidence score, ATM highlighting, signal ranking, position sizing, and ticker validation.</div>
+        <div class="hero-subtitle">Smarter scanner with trend confirmation, trade plan, position sizing, and no-trade logic.</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -492,7 +584,7 @@ with left_top:
     raw_symbol = st.text_input("Enter ticker (e.g. MSFT, TSLA, SPY)", "SPY")
 with right_top:
     st.markdown(
-        "<div class='small-note' style='padding-top: 12px;'>Tip: use ticker symbols like MSFT, TSLA, NVDA, SPY, or type common names like Microsoft and Tesla.</div>",
+        "<div class='small-note' style='padding-top: 12px;'>Tip: type ticker symbols or common names like Microsoft, Tesla, or S&P500.</div>",
         unsafe_allow_html=True,
     )
 
@@ -502,13 +594,15 @@ if raw_symbol != symbol:
     st.info(f"Using ticker symbol: {symbol}")
 
 st.markdown("### Scanner Filters")
-f1, f2, f3 = st.columns(3)
+f1, f2, f3, f4 = st.columns(4)
 with f1:
     top_n = st.slider("Top contracts", 5, 25, 10)
 with f2:
     min_volume = st.number_input("Minimum volume", min_value=0, value=50, step=10)
 with f3:
     min_oi = st.number_input("Minimum open interest", min_value=0, value=100, step=50)
+with f4:
+    min_confidence = st.slider("Minimum confidence", 0, 100, 60)
 
 max_spread_pct = st.slider("Maximum spread %", 1, 50, 15)
 
@@ -528,7 +622,9 @@ if not is_valid:
 try:
     ticker, expirations = fetch_data(symbol)
     underlying_price = get_underlying_price(validated_ticker)
-    trend_strength, trend_label = get_trend_strength(validated_ticker)
+    trend = get_trend_context(validated_ticker)
+    trend_strength = trend["trend_strength"]
+    trend_label = trend["trend_label"]
 except Exception as e:
     st.error(f"Could not load market data for {symbol}: {e}")
     st.stop()
@@ -552,8 +648,11 @@ filtered = df[
     & (df["spread_pct"] <= max_spread_pct)
 ].copy()
 
-calls_scored = score(filtered, "Call", trend_strength, capital)
-puts_scored = score(filtered, "Put", trend_strength, capital)
+calls_scored = score(filtered, "Call", trend_strength, trend_label, capital)
+puts_scored = score(filtered, "Put", trend_strength, trend_label, capital)
+
+calls_scored = calls_scored[calls_scored["confidence"] >= min_confidence]
+puts_scored = puts_scored[puts_scored["confidence"] >= min_confidence]
 
 calls = calls_scored.head(top_n)
 puts = puts_scored.head(top_n)
@@ -562,31 +661,36 @@ scored_all = pd.concat([calls_scored, puts_scored], ignore_index=True)
 
 m1, m2, m3, m4 = st.columns(4)
 atm_count = int((scored_all["atm_flag"] == "ATM").sum()) if not scored_all.empty else 0
-buy_count = int(scored_all["signal"].isin(["STRONG BUY", "BUY"]).sum()) if not scored_all.empty else 0
+actionable_count = int(scored_all["signal"].isin(["STRONG BUY", "BUY"]).sum()) if not scored_all.empty else 0
 
 m1.metric("Underlying", symbol)
 m2.metric("Spot Price", f"${underlying_price:,.2f}" if underlying_price else "N/A")
 m3.metric("Trend Bias", trend_label)
-m4.metric("Actionable Signals", f"{buy_count}")
+m4.metric("Actionable Signals", f"{actionable_count}")
 
 i1, i2, i3 = st.columns(3)
 with i1:
+    support_txt = f"${trend['support']:.2f}" if trend["support"] is not None else "N/A"
+    st.markdown(
+        f"<div class='info-card'><div class='info-label'>Support</div><div class='info-value'>{support_txt}</div></div>",
+        unsafe_allow_html=True,
+    )
+with i2:
+    resistance_txt = f"${trend['resistance']:.2f}" if trend["resistance"] is not None else "N/A"
+    st.markdown(
+        f"<div class='info-card'><div class='info-label'>Resistance</div><div class='info-value'>{resistance_txt}</div></div>",
+        unsafe_allow_html=True,
+    )
+with i3:
     st.markdown(
         f"<div class='info-card'><div class='info-label'>Selected Expiration</div><div class='info-value'>{expiry}</div></div>",
         unsafe_allow_html=True,
     )
-with i2:
-    best_call_conf = f"{calls.iloc[0]['confidence']:.1f}" if not calls.empty else "N/A"
-    st.markdown(
-        f"<div class='info-card'><div class='info-label'>Best Call Confidence</div><div class='info-value'>{best_call_conf}</div></div>",
-        unsafe_allow_html=True,
-    )
-with i3:
-    best_put_conf = f"{puts.iloc[0]['confidence']:.1f}" if not puts.empty else "N/A"
-    st.markdown(
-        f"<div class='info-card'><div class='info-label'>Best Put Confidence</div><div class='info-value'>{best_put_conf}</div></div>",
-        unsafe_allow_html=True,
-    )
+
+if scored_all.empty or actionable_count == 0:
+    st.warning("⚠️ No strong trade setup right now. Best move may be no trade.")
+else:
+    st.success("✅ Tradeable setups found based on your filters and current trend.")
 
 c1, c2 = st.columns(2)
 with c1:
@@ -595,7 +699,7 @@ with c2:
     render_idea_card("Best Put", puts.iloc[0] if not puts.empty else None)
 
 st.info(
-    "Confidence combines contract quality, win model, and trend alignment. Position sizing uses your investment amount and the option ask price. This is a decision support model, not a guarantee."
+    "Trend confirmation checks whether calls align with a bullish trend and puts align with a bearish trend. Entry, stop, and target are model-based planning levels, not guarantees."
 )
 
 tab1, tab2, tab3 = st.tabs(["Top Calls", "Top Puts", "ATM Snapshot"])
