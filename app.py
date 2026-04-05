@@ -7,7 +7,7 @@ import yfinance as yf
 
 st.set_page_config(page_title="Options Trade Dashboard", page_icon="📈", layout="wide")
 
-APP_VERSION = "v5 smart dashboard with position sizing"
+APP_VERSION = "v6 smart dashboard with ticker validation"
 
 st.markdown(
     """
@@ -128,6 +128,48 @@ def calculate_position_size(capital: float, option_price: float):
     if option_price <= 0:
         return 0
     return int(capital // (option_price * 100))
+
+
+def clean_symbol(user_input: str):
+    name_map = {
+        "MICROSOFT": "MSFT",
+        "MSFT": "MSFT",
+        "TESLA": "TSLA",
+        "TSLA": "TSLA",
+        "APPLE": "AAPL",
+        "AAPL": "AAPL",
+        "NVIDIA": "NVDA",
+        "NVDA": "NVDA",
+        "AMAZON": "AMZN",
+        "AMZN": "AMZN",
+        "GOOGLE": "GOOGL",
+        "GOOGL": "GOOGL",
+        "ALPHABET": "GOOGL",
+        "META": "META",
+        "FACEBOOK": "META",
+        "NETFLIX": "NFLX",
+        "NFLX": "NFLX",
+        "SPY": "SPY",
+        "QQQ": "QQQ",
+        "AMD": "AMD",
+        "AMD": "AMD",
+        "COIN": "COIN",
+        "PALANTIR": "PLTR",
+        "PLTR": "PLTR",
+    }
+
+    raw = (user_input or "").upper().strip()
+    cleaned = raw.replace("$", "").strip()
+    symbol = name_map.get(cleaned, cleaned)
+    return raw, symbol
+
+
+def validate_ticker(symbol: str):
+    ticker = yf.Ticker(symbol)
+    test = ticker.history(period="5d")
+    if test.empty:
+        return None, False
+    return ticker, True
 
 
 def fetch_data(symbol: str):
@@ -437,7 +479,7 @@ st.markdown(
     """
     <div class="hero-box">
         <div class="hero-title">📈 Options Trade Dashboard</div>
-        <div class="hero-subtitle">Smarter scanner with confidence score, ATM highlighting, signal ranking, and position sizing.</div>
+        <div class="hero-subtitle">Smarter scanner with confidence score, ATM highlighting, signal ranking, position sizing, and ticker validation.</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -447,12 +489,17 @@ st.caption(APP_VERSION)
 
 left_top, right_top = st.columns([1.6, 1])
 with left_top:
-    symbol = st.text_input("Ticker", "SPY").upper().strip()
+    raw_symbol = st.text_input("Enter ticker (e.g. MSFT, TSLA, SPY)", "SPY")
 with right_top:
     st.markdown(
-        "<div class='small-note' style='padding-top: 12px;'>Tip: liquid tickers usually give cleaner options data and tighter spreads.</div>",
+        "<div class='small-note' style='padding-top: 12px;'>Tip: use ticker symbols like MSFT, TSLA, NVDA, SPY, or type common names like Microsoft and Tesla.</div>",
         unsafe_allow_html=True,
     )
+
+raw_symbol, symbol = clean_symbol(raw_symbol)
+
+if raw_symbol != symbol:
+    st.info(f"Using ticker symbol: {symbol}")
 
 st.markdown("### Scanner Filters")
 f1, f2, f3 = st.columns(3)
@@ -473,16 +520,21 @@ capital = st.number_input(
     step=100,
 )
 
+validated_ticker, is_valid = validate_ticker(symbol)
+if not is_valid:
+    st.error(f"Invalid ticker: {symbol}. Try symbols like MSFT, TSLA, NVDA, SPY, or QQQ.")
+    st.stop()
+
 try:
     ticker, expirations = fetch_data(symbol)
-    underlying_price = get_underlying_price(ticker)
-    trend_strength, trend_label = get_trend_strength(ticker)
+    underlying_price = get_underlying_price(validated_ticker)
+    trend_strength, trend_label = get_trend_strength(validated_ticker)
 except Exception as e:
     st.error(f"Could not load market data for {symbol}: {e}")
     st.stop()
 
 if not expirations:
-    st.error("No options found for this ticker.")
+    st.error(f"No options found for ticker: {symbol}")
     st.stop()
 
 expiry = st.selectbox("Expiration", expirations)
