@@ -464,7 +464,9 @@ with tab2:
     show_table(puts, f"Top Put Contracts for {symbol} {expiry}")
 
 with tab3:
-    atm_df = filtered[filtered["atm_flag"] == "ATM"].copy()
+    scored_all = pd.concat([score(filtered, "Call"), score(filtered, "Put")], ignore_index=True)
+    atm_df = scored_all[scored_all["atm_flag"] == "ATM"].copy()
+
     if atm_df.empty:
         st.info("No ATM contracts matched the current filters.")
     else:
