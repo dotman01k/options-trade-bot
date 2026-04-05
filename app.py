@@ -1,4 +1,5 @@
 import math
+import time
 
 import numpy as np
 import pandas as pd
@@ -7,8 +8,7 @@ import yfinance as yf
 
 st.set_page_config(page_title="Beginner Options Dashboard", page_icon="📈", layout="wide")
 
-APP_VERSION = "v9 beginner-friendly confirmation dashboard"
-
+APP_VERSION = "v10 beginner dashboard + market scanner"
 
 st.markdown(
     """
@@ -600,11 +600,59 @@ def show_table(df: pd.DataFrame, title: str):
     st.dataframe(style_table(pretty), width="stretch", hide_index=True)
 
 
+def get_best_setup_for_symbol(symbol: str, capital: float, max_spread_pct: int):
+    validated_ticker, is_valid = validate_ticker(symbol)
+    if not is_valid:
+        return None
+
+    try:
+        ticker = validated_ticker
+        expirations = fetch_expirations(symbol)
+        if not expirations:
+            return None
+
+        stock_ctx = get_stock_context(ticker)
+        spot_price = stock_ctx["price"] if stock_ctx["price"] > 0 else get_spot_price(ticker)
+        nearest_expiry = expirations[0]
+
+        raw_chain = fetch_chain(symbol, nearest_expiry)
+        chain_df = clean_chain_df(raw_chain, nearest_expiry, spot_price)
+
+        filtered = chain_df[
+            (chain_df["volume"] >= 50)
+            & (chain_df["open_interest"] >= 100)
+            & (chain_df["spread_pct"] <= max_spread_pct)
+        ].copy()
+
+        calls_scored = score_options(filtered, "Call", stock_ctx, capital)
+        puts_scored = score_options(filtered, "Put", stock_ctx, capital)
+
+        combined = pd.concat([calls_scored, puts_scored], ignore_index=True)
+        if combined.empty:
+            return None
+
+        order_map = {"STRONG BUY": 0, "BUY": 1, "WATCH": 2, "NO TRADE": 3}
+        combined["signal_rank"] = combined["signal"].map(order_map)
+        combined = combined.sort_values(
+            ["signal_rank", "confidence", "win_probability", "base_score"],
+            ascending=[True, False, False, False],
+        )
+
+        best = combined.iloc[0].copy()
+        best["stock_symbol"] = symbol
+        best["trend"] = stock_ctx["trend_label"]
+        best["spot_price"] = spot_price
+        return best
+
+    except Exception:
+        return None
+
+
 st.markdown(
     """
     <div class="hero-box">
         <div class="hero-title">📈 Beginner Options Dashboard</div>
-        <div class="hero-subtitle">A simple options scanner that explains whether a setup looks strong, weak, or not ready yet.</div>
+        <div class="hero-subtitle">A simple options scanner for one stock and a market scanner for top opportunities.</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -612,154 +660,253 @@ st.markdown(
 
 st.caption(APP_VERSION)
 
-top_left, top_right = st.columns([1.6, 1])
-with top_left:
-    raw_symbol = st.text_input("Enter stock ticker or name", "SPY")
-with top_right:
-    st.markdown(
-        "<div class='help-note' style='padding-top:12px;'>Examples: SPY, QQQ, MSFT, NVDA, Tesla, Microsoft, S&P500</div>",
-        unsafe_allow_html=True,
+page1, page2 = st.tabs(["Single Stock Scanner", "Market Scanner"])
+
+with page1:
+    top_left, top_right = st.columns([1.6, 1])
+    with top_left:
+        raw_symbol = st.text_input("Enter stock ticker or name", "SPY")
+    with top_right:
+        st.markdown(
+            "<div class='help-note' style='padding-top:12px;'>Examples: SPY, QQQ, MSFT, NVDA, Tesla, Microsoft, S&P500</div>",
+            unsafe_allow_html=True,
+        )
+
+    raw_symbol, symbol = clean_symbol(raw_symbol)
+
+    if raw_symbol != symbol:
+        st.info(f"Using ticker symbol: {symbol}")
+
+    st.markdown("### Basic Settings")
+    s1, s2, s3, s4 = st.columns(4)
+    with s1:
+        top_n = st.slider("How many ideas to show", 5, 25, 10)
+    with s2:
+        min_volume = st.number_input("Minimum option volume", min_value=0, value=50, step=10)
+    with s3:
+        min_oi = st.number_input("Minimum open interest", min_value=0, value=100, step=50)
+    with s4:
+        max_spread_pct = st.slider("Maximum spread %", 1, 50, 15)
+
+    st.markdown("### Money Settings")
+    capital = st.number_input(
+        "How much money are you investing ($)",
+        min_value=100,
+        value=1000,
+        step=100,
     )
 
-raw_symbol, symbol = clean_symbol(raw_symbol)
+    validated_ticker, is_valid = validate_ticker(symbol)
+    if not is_valid:
+        st.error(f"Invalid ticker: {symbol}. Try SPY, QQQ, MSFT, TSLA, NVDA, or AAPL.")
+        st.stop()
 
-if raw_symbol != symbol:
-    st.info(f"Using ticker symbol: {symbol}")
+    try:
+        ticker = validated_ticker
+        expirations = fetch_expirations(symbol)
+        stock_ctx = get_stock_context(ticker)
+        spot_price = stock_ctx["price"] if stock_ctx["price"] > 0 else get_spot_price(ticker)
+    except Exception as e:
+        st.error(f"Could not load stock data for {symbol}: {e}")
+        st.stop()
 
-st.markdown("### Basic Settings")
-s1, s2, s3, s4 = st.columns(4)
-with s1:
-    top_n = st.slider("How many ideas to show", 5, 25, 10)
-with s2:
-    min_volume = st.number_input("Minimum option volume", min_value=0, value=50, step=10)
-with s3:
-    min_oi = st.number_input("Minimum open interest", min_value=0, value=100, step=50)
-with s4:
-    max_spread_pct = st.slider("Maximum spread %", 1, 50, 15)
+    if not expirations:
+        st.error(f"No options found for {symbol}.")
+        st.stop()
 
-st.markdown("### Money Settings")
-capital = st.number_input(
-    "How much money are you investing ($)",
-    min_value=100,
-    value=1000,
-    step=100,
-)
+    expiry = st.selectbox("Choose expiration", expirations)
 
-validated_ticker, is_valid = validate_ticker(symbol)
-if not is_valid:
-    st.error(f"Invalid ticker: {symbol}. Try SPY, QQQ, MSFT, TSLA, NVDA, or AAPL.")
-    st.stop()
+    try:
+        raw_chain = fetch_chain(symbol, expiry)
+        chain_df = clean_chain_df(raw_chain, expiry, spot_price)
+    except Exception as e:
+        st.error(f"Could not load options chain: {e}")
+        st.stop()
 
-try:
-    ticker = validated_ticker
-    expirations = fetch_expirations(symbol)
-    stock_ctx = get_stock_context(ticker)
-    spot_price = stock_ctx["price"] if stock_ctx["price"] > 0 else get_spot_price(ticker)
-except Exception as e:
-    st.error(f"Could not load stock data for {symbol}: {e}")
-    st.stop()
+    filtered = chain_df[
+        (chain_df["volume"] >= min_volume)
+        & (chain_df["open_interest"] >= min_oi)
+        & (chain_df["spread_pct"] <= max_spread_pct)
+    ].copy()
 
-if not expirations:
-    st.error(f"No options found for {symbol}.")
-    st.stop()
+    calls_scored = score_options(filtered, "Call", stock_ctx, capital)
+    puts_scored = score_options(filtered, "Put", stock_ctx, capital)
 
-expiry = st.selectbox("Choose expiration", expirations)
+    calls = calls_scored.head(top_n)
+    puts = puts_scored.head(top_n)
+    all_scored = pd.concat([calls_scored, puts_scored], ignore_index=True)
 
-try:
-    raw_chain = fetch_chain(symbol, expiry)
-    chain_df = clean_chain_df(raw_chain, expiry, spot_price)
-except Exception as e:
-    st.error(f"Could not load options chain: {e}")
-    st.stop()
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Stock", symbol)
+    m2.metric("Stock Price", f"${spot_price:,.2f}" if spot_price else "N/A")
+    m3.metric("Trend", stock_ctx["trend_label"])
+    actionable_count = int(all_scored["signal"].isin(["STRONG BUY", "BUY"]).sum()) if not all_scored.empty else 0
+    m4.metric("Good Setups", actionable_count)
 
-filtered = chain_df[
-    (chain_df["volume"] >= min_volume)
-    & (chain_df["open_interest"] >= min_oi)
-    & (chain_df["spread_pct"] <= max_spread_pct)
-].copy()
+    rsi_value = f"{stock_ctx['rsi']:.1f}" if stock_ctx["rsi"] is not None else "N/A"
+    vwap_value = f"${stock_ctx['vwap']:.2f}" if stock_ctx["vwap"] is not None else "N/A"
+    rel_vol_value = f"{stock_ctx['relative_volume']:.2f}x" if stock_ctx["relative_volume"] is not None else "N/A"
+    support_value = f"${stock_ctx['support']:.2f}" if stock_ctx["support"] is not None else "N/A"
+    resistance_value = f"${stock_ctx['resistance']:.2f}" if stock_ctx["resistance"] is not None else "N/A"
 
-calls_scored = score_options(filtered, "Call", stock_ctx, capital)
-puts_scored = score_options(filtered, "Put", stock_ctx, capital)
+    i1, i2, i3, i4 = st.columns(4)
+    with i1:
+        st.markdown(
+            f"<div class='simple-card'><div class='simple-label'>RSI</div><div class='simple-value'>{rsi_value}</div></div>",
+            unsafe_allow_html=True,
+        )
+    with i2:
+        st.markdown(
+            f"<div class='simple-card'><div class='simple-label'>VWAP</div><div class='simple-value'>{vwap_value}</div></div>",
+            unsafe_allow_html=True,
+        )
+    with i3:
+        st.markdown(
+            f"<div class='simple-card'><div class='simple-label'>Relative Volume</div><div class='simple-value'>{rel_vol_value}</div></div>",
+            unsafe_allow_html=True,
+        )
+    with i4:
+        st.markdown(
+            f"<div class='simple-card'><div class='simple-label'>Expiration</div><div class='simple-value'>{expiry}</div></div>",
+            unsafe_allow_html=True,
+        )
 
-calls = calls_scored.head(top_n)
-puts = puts_scored.head(top_n)
-all_scored = pd.concat([calls_scored, puts_scored], ignore_index=True)
+    j1, j2 = st.columns(2)
+    with j1:
+        st.markdown(
+            f"<div class='simple-card'><div class='simple-label'>Support</div><div class='simple-value'>{support_value}</div></div>",
+            unsafe_allow_html=True,
+        )
+    with j2:
+        st.markdown(
+            f"<div class='simple-card'><div class='simple-label'>Resistance</div><div class='simple-value'>{resistance_value}</div></div>",
+            unsafe_allow_html=True,
+        )
 
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Stock", symbol)
-m2.metric("Stock Price", f"${spot_price:,.2f}" if spot_price else "N/A")
-m3.metric("Trend", stock_ctx["trend_label"])
-actionable_count = int(all_scored["signal"].isin(["STRONG BUY", "BUY"]).sum()) if not all_scored.empty else 0
-m4.metric("Good Setups", actionable_count)
-
-rsi_value = f"{stock_ctx['rsi']:.1f}" if stock_ctx["rsi"] is not None else "N/A"
-vwap_value = f"${stock_ctx['vwap']:.2f}" if stock_ctx["vwap"] is not None else "N/A"
-rel_vol_value = f"{stock_ctx['relative_volume']:.2f}x" if stock_ctx["relative_volume"] is not None else "N/A"
-support_value = f"${stock_ctx['support']:.2f}" if stock_ctx["support"] is not None else "N/A"
-resistance_value = f"${stock_ctx['resistance']:.2f}" if stock_ctx["resistance"] is not None else "N/A"
-
-i1, i2, i3, i4 = st.columns(4)
-with i1:
-    st.markdown(
-        f"<div class='simple-card'><div class='simple-label'>RSI</div><div class='simple-value'>{rsi_value}</div></div>",
-        unsafe_allow_html=True,
-    )
-with i2:
-    st.markdown(
-        f"<div class='simple-card'><div class='simple-label'>VWAP</div><div class='simple-value'>{vwap_value}</div></div>",
-        unsafe_allow_html=True,
-    )
-with i3:
-    st.markdown(
-        f"<div class='simple-card'><div class='simple-label'>Relative Volume</div><div class='simple-value'>{rel_vol_value}</div></div>",
-        unsafe_allow_html=True,
-    )
-with i4:
-    st.markdown(
-        f"<div class='simple-card'><div class='simple-label'>Expiration</div><div class='simple-value'>{expiry}</div></div>",
-        unsafe_allow_html=True,
-    )
-
-j1, j2 = st.columns(2)
-with j1:
-    st.markdown(
-        f"<div class='simple-card'><div class='simple-label'>Support</div><div class='simple-value'>{support_value}</div></div>",
-        unsafe_allow_html=True,
-    )
-with j2:
-    st.markdown(
-        f"<div class='simple-card'><div class='simple-label'>Resistance</div><div class='simple-value'>{resistance_value}</div></div>",
-        unsafe_allow_html=True,
-    )
-
-if all_scored.empty:
-    st.warning("No trades matched your filters. Try lowering your filters or switching tickers.")
-elif actionable_count == 0:
-    st.warning("No strong trade right now. The dashboard thinks it may be better to wait.")
-else:
-    st.success("Good — the scanner found setups with enough confirmation to review.")
-
-c1, c2 = st.columns(2)
-with c1:
-    render_trade_card("Best Call Idea", calls.iloc[0] if not calls.empty else None)
-with c2:
-    render_trade_card("Best Put Idea", puts.iloc[0] if not puts.empty else None)
-
-st.info(
-    "Beginner guide: STRONG BUY means most important conditions agree. BUY means decent setup. WATCH means not ready yet. NO TRADE means the chart and contract do not line up well enough."
-)
-
-tab1, tab2, tab3 = st.tabs(["Top Calls", "Top Puts", "ATM Contracts"])
-
-with tab1:
-    show_table(calls, f"Top Call Contracts for {symbol} {expiry}")
-
-with tab2:
-    show_table(puts, f"Top Put Contracts for {symbol} {expiry}")
-
-with tab3:
-    atm_df = all_scored[all_scored["atm_flag"] == "ATM"].copy()
-    if atm_df.empty:
-        st.info("No ATM contracts matched your filters.")
+    if all_scored.empty:
+        st.warning("No trades matched your filters. Try lowering your filters or switching tickers.")
+    elif actionable_count == 0:
+        st.warning("No strong trade right now. The dashboard thinks it may be better to wait.")
     else:
-        show_table(atm_df.head(20), f"ATM Contracts for {symbol} {expiry}")
+        st.success("Good — the scanner found setups with enough confirmation to review.")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        render_trade_card("Best Call Idea", calls.iloc[0] if not calls.empty else None)
+    with c2:
+        render_trade_card("Best Put Idea", puts.iloc[0] if not puts.empty else None)
+
+    st.info(
+        "Beginner guide: STRONG BUY means most important conditions agree. BUY means decent setup. WATCH means not ready yet. NO TRADE means the chart and contract do not line up well enough."
+    )
+
+    tab1, tab2, tab3 = st.tabs(["Top Calls", "Top Puts", "ATM Contracts"])
+
+    with tab1:
+        show_table(calls, f"Top Call Contracts for {symbol} {expiry}")
+
+    with tab2:
+        show_table(puts, f"Top Put Contracts for {symbol} {expiry}")
+
+    with tab3:
+        atm_df = all_scored[all_scored["atm_flag"] == "ATM"].copy()
+        if atm_df.empty:
+            st.info("No ATM contracts matched your filters.")
+        else:
+            show_table(atm_df.head(20), f"ATM Contracts for {symbol} {expiry}")
+
+with page2:
+    st.markdown("### Market Scanner")
+    st.markdown(
+        "<div class='help-note'>This scans a watchlist of liquid option stocks and ranks the top 5 opportunities. With free Yahoo data, this is the best practical version of a whole market scan.</div>",
+        unsafe_allow_html=True,
+    )
+
+    default_watchlist = "SPY, QQQ, AAPL, MSFT, NVDA, TSLA, AMZN, META, GOOGL, AMD, NFLX, COIN, PLTR"
+    watchlist_input = st.text_area("Stocks to scan", value=default_watchlist, height=90)
+    scan_capital = st.number_input("Capital to size each idea ($)", min_value=100, value=1000, step=100, key="scan_capital")
+    scan_spread = st.slider("Scanner max spread %", 1, 50, 15, key="scan_spread")
+    run_scan = st.button("Run Market Scan")
+
+    if run_scan:
+        raw_symbols = [x.strip() for x in watchlist_input.split(",") if x.strip()]
+        symbols = [clean_symbol(x)[1] for x in raw_symbols]
+
+        results = []
+        progress = st.progress(0)
+        status = st.empty()
+
+        for i, sym in enumerate(symbols):
+            status.write(f"Scanning {sym}...")
+            result = get_best_setup_for_symbol(sym, scan_capital, scan_spread)
+            if result is not None:
+                results.append(result)
+            progress.progress((i + 1) / len(symbols))
+            time.sleep(0.1)
+
+        status.empty()
+
+        if not results:
+            st.warning("No strong setups were found in this watchlist.")
+        else:
+            market_df = pd.DataFrame(results)
+
+            order_map = {"STRONG BUY": 0, "BUY": 1, "WATCH": 2, "NO TRADE": 3}
+            market_df["signal_rank"] = market_df["signal"].map(order_map)
+            market_df = market_df.sort_values(
+                ["signal_rank", "confidence", "win_probability", "base_score"],
+                ascending=[True, False, False, False],
+            )
+
+            top5 = market_df.head(5).copy()
+
+            st.success("Scan complete. Here are the top 5 options stocks to review.")
+
+            st.subheader("Top 5 Options Stocks to Buy")
+            display_df = top5[
+                [
+                    "stock_symbol",
+                    "option_type",
+                    "signal",
+                    "confidence",
+                    "win_probability",
+                    "trend",
+                    "spot_price",
+                    "symbol",
+                    "strike",
+                    "expiration_date",
+                    "entry_price",
+                    "stop_price",
+                    "target_price",
+                    "contracts",
+                    "position_cost",
+                    "rr_ratio",
+                    "reason",
+                ]
+            ].copy()
+
+            display_df.columns = [
+                "Stock",
+                "Side",
+                "Signal",
+                "Confidence",
+                "Win %",
+                "Trend",
+                "Stock Price",
+                "Option Contract",
+                "Strike",
+                "Expiry",
+                "Entry",
+                "Stop",
+                "Target",
+                "Contracts",
+                "Total Cost",
+                "R/R",
+                "Why",
+            ]
+
+            st.dataframe(display_df, width="stretch", hide_index=True)
+
+            st.markdown("### Best Overall Setup")
+            best = top5.iloc[0]
+            render_trade_card("Top Market Setup", best)
