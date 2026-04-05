@@ -5,9 +5,10 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 
-st.set_page_config(page_title="Options + Crypto Trade Dashboard", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Beginner Options Dashboard", page_icon="📈", layout="wide")
 
-APP_VERSION = "v8 options + crypto scanner"
+APP_VERSION = "v9 beginner-friendly confirmation dashboard"
+
 
 st.markdown(
     """
@@ -36,63 +37,70 @@ st.markdown(
         color: #9ca3af;
         font-size: 0.95rem;
     }
-    div[data-testid="stMetric"] {
-        background: #111827;
-        border: 1px solid #1f2937;
-        border-radius: 12px;
-        padding: 10px;
-    }
-    .info-card {
+    .simple-card {
         background: #111827;
         border: 1px solid #1f2937;
         border-radius: 12px;
         padding: 14px;
     }
-    .info-label {
+    .simple-label {
         color: #93c5fd;
-        font-size: 0.88rem;
+        font-size: 0.9rem;
         margin-bottom: 4px;
     }
-    .info-value {
+    .simple-value {
         color: #ffffff;
         font-size: 1.25rem;
         font-weight: 800;
     }
-    .signal-card-buy {
+    .signal-card-strong {
         background: #062e1f;
         border: 1px solid #16a34a;
         border-radius: 12px;
-        padding: 14px;
+        padding: 16px;
         min-height: 280px;
     }
-    .signal-card-watch {
+    .signal-card-buy {
         background: #3b2f00;
         border: 1px solid #facc15;
         border-radius: 12px;
-        padding: 14px;
+        padding: 16px;
         min-height: 280px;
     }
-    .signal-card-avoid {
+    .signal-card-watch {
+        background: #1f2937;
+        border: 1px solid #64748b;
+        border-radius: 12px;
+        padding: 16px;
+        min-height: 280px;
+    }
+    .signal-card-no {
         background: #3b0a0a;
         border: 1px solid #ef4444;
         border-radius: 12px;
-        padding: 14px;
+        padding: 16px;
         min-height: 280px;
     }
     .card-title {
-        color: #ffffff;
-        font-size: 1.05rem;
+        color: white;
+        font-size: 1.1rem;
         font-weight: 800;
         margin-bottom: 8px;
     }
     .card-main {
         color: #d1d5db;
         font-size: 0.98rem;
-        line-height: 1.55;
+        line-height: 1.6;
     }
-    .small-note {
+    .help-note {
         color: #9ca3af;
         font-size: 0.85rem;
+    }
+    div[data-testid="stMetric"] {
+        background: #111827;
+        border: 1px solid #1f2937;
+        border-radius: 12px;
+        padding: 10px;
     }
     </style>
     """,
@@ -120,10 +128,10 @@ def normalize(series: pd.Series):
     return ((s - mn) / (mx - mn) * 100).round(2)
 
 
-def calculate_position_size(capital: float, unit_price: float, multiplier: int = 100):
-    if unit_price <= 0:
+def calculate_contracts(capital: float, option_price: float):
+    if option_price <= 0:
         return 0
-    return int(capital // (unit_price * multiplier))
+    return int(capital // (option_price * 100))
 
 
 def clean_symbol(user_input: str):
@@ -162,32 +170,6 @@ def clean_symbol(user_input: str):
     return raw, symbol
 
 
-def clean_crypto_symbol(user_input: str):
-    crypto_map = {
-        "BITCOIN": "BTC-USD",
-        "BTC": "BTC-USD",
-        "BTC-USD": "BTC-USD",
-        "ETHEREUM": "ETH-USD",
-        "ETH": "ETH-USD",
-        "ETH-USD": "ETH-USD",
-        "SOLANA": "SOL-USD",
-        "SOL": "SOL-USD",
-        "SOL-USD": "SOL-USD",
-        "DOGE": "DOGE-USD",
-        "DOGECOIN": "DOGE-USD",
-        "DOGE-USD": "DOGE-USD",
-        "XRP": "XRP-USD",
-        "XRP-USD": "XRP-USD",
-        "CARDANO": "ADA-USD",
-        "ADA": "ADA-USD",
-        "ADA-USD": "ADA-USD",
-    }
-    raw = (user_input or "").upper().strip()
-    cleaned = raw.replace("$", "").strip()
-    symbol = crypto_map.get(cleaned, cleaned)
-    return raw, symbol
-
-
 def validate_ticker(symbol: str):
     ticker = yf.Ticker(symbol)
     test = ticker.history(period="5d")
@@ -196,10 +178,89 @@ def validate_ticker(symbol: str):
     return ticker, True
 
 
-def fetch_data(symbol: str):
+def get_spot_price(ticker):
+    fast_info = getattr(ticker, "fast_info", {}) or {}
+    for key in ["lastPrice", "regularMarketPrice", "previousClose", "open"]:
+        value = safe_float(fast_info.get(key))
+        if value > 0:
+            return value
+
+    hist = ticker.history(period="1d", interval="1m")
+    if not hist.empty and "Close" in hist.columns:
+        return safe_float(hist["Close"].dropna().iloc[-1])
+    return 0.0
+
+
+def get_stock_context(ticker):
+    hourly = ticker.history(period="20d", interval="1h")
+    intraday = ticker.history(period="5d", interval="15m")
+
+    if hourly.empty or intraday.empty:
+        return {
+            "trend_label": "Neutral",
+            "trend_strength": 50.0,
+            "price": 0.0,
+            "ema9": None,
+            "ema21": None,
+            "rsi": None,
+            "vwap": None,
+            "relative_volume": None,
+            "support": None,
+            "resistance": None,
+        }
+
+    hourly_close = hourly["Close"].dropna()
+    ema9 = hourly_close.ewm(span=9).mean().iloc[-1]
+    ema21 = hourly_close.ewm(span=21).mean().iloc[-1]
+
+    if ema9 > ema21:
+        trend_label = "Bullish"
+        trend_strength = 80.0
+    elif ema9 < ema21:
+        trend_label = "Bearish"
+        trend_strength = 20.0
+    else:
+        trend_label = "Neutral"
+        trend_strength = 50.0
+
+    price = float(intraday["Close"].dropna().iloc[-1])
+
+    delta = intraday["Close"].diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    rs = gain / loss.replace(0, np.nan)
+    rsi_series = 100 - (100 / (1 + rs))
+    rsi = safe_float(rsi_series.dropna().iloc[-1] if not rsi_series.dropna().empty else 50)
+
+    typical_price = (intraday["High"] + intraday["Low"] + intraday["Close"]) / 3
+    cum_vol = intraday["Volume"].cumsum()
+    vwap_series = (typical_price * intraday["Volume"]).cumsum() / cum_vol.replace(0, np.nan)
+    vwap = safe_float(vwap_series.dropna().iloc[-1] if not vwap_series.dropna().empty else price)
+
+    last_volume = safe_float(intraday["Volume"].iloc[-1])
+    avg_volume = safe_float(intraday["Volume"].tail(20).mean(), 1)
+    relative_volume = round(last_volume / avg_volume, 2) if avg_volume > 0 else 1.0
+
+    support = safe_float(hourly["Low"].tail(20).min())
+    resistance = safe_float(hourly["High"].tail(20).max())
+
+    return {
+        "trend_label": trend_label,
+        "trend_strength": trend_strength,
+        "price": price,
+        "ema9": float(ema9),
+        "ema21": float(ema21),
+        "rsi": float(rsi),
+        "vwap": float(vwap),
+        "relative_volume": float(relative_volume),
+        "support": float(support),
+        "resistance": float(resistance),
+    }
+
+
+def fetch_expirations(symbol: str):
     ticker = yf.Ticker(symbol)
-    expirations = list(ticker.options)
-    return ticker, expirations
+    return list(ticker.options)
 
 
 def fetch_chain(symbol: str, expiration: str):
@@ -215,72 +276,7 @@ def fetch_chain(symbol: str, expiration: str):
     return pd.concat([calls, puts], ignore_index=True)
 
 
-def get_underlying_price(ticker):
-    fast_info = getattr(ticker, "fast_info", {}) or {}
-    for key in ["lastPrice", "regularMarketPrice", "previousClose", "open"]:
-        value = safe_float(fast_info.get(key))
-        if value > 0:
-            return value
-
-    history = ticker.history(period="1d", interval="1m")
-    if not history.empty and "Close" in history.columns:
-        return safe_float(history["Close"].dropna().iloc[-1])
-    return 0.0
-
-
-def get_trend_context(ticker):
-    hist = ticker.history(period="20d", interval="1h")
-    if hist.empty or "Close" not in hist.columns:
-        return {
-            "trend_strength": 50.0,
-            "trend_label": "Neutral",
-            "ema9": None,
-            "ema21": None,
-            "support": None,
-            "resistance": None,
-        }
-
-    close = hist["Close"].dropna()
-    low = hist["Low"].dropna() if "Low" in hist.columns else pd.Series(dtype=float)
-    high = hist["High"].dropna() if "High" in hist.columns else pd.Series(dtype=float)
-
-    if len(close) < 21:
-        return {
-            "trend_strength": 50.0,
-            "trend_label": "Neutral",
-            "ema9": None,
-            "ema21": None,
-            "support": None,
-            "resistance": None,
-        }
-
-    ema9 = close.ewm(span=9).mean().iloc[-1]
-    ema21 = close.ewm(span=21).mean().iloc[-1]
-
-    if ema9 > ema21:
-        trend_strength = 80.0
-        trend_label = "Bullish"
-    elif ema9 < ema21:
-        trend_strength = 20.0
-        trend_label = "Bearish"
-    else:
-        trend_strength = 50.0
-        trend_label = "Neutral"
-
-    support = low.tail(20).min() if not low.empty else None
-    resistance = high.tail(20).max() if not high.empty else None
-
-    return {
-        "trend_strength": trend_strength,
-        "trend_label": trend_label,
-        "ema9": float(ema9),
-        "ema21": float(ema21),
-        "support": float(support) if support is not None else None,
-        "resistance": float(resistance) if resistance is not None else None,
-    }
-
-
-def clean_df(df: pd.DataFrame, expiration: str, underlying_price: float):
+def clean_chain_df(df: pd.DataFrame, expiration: str, spot_price: float):
     df = df.rename(
         columns={
             "contractSymbol": "symbol",
@@ -305,244 +301,196 @@ def clean_df(df: pd.DataFrame, expiration: str, underlying_price: float):
     )
 
     df["spread"] = (df["ask"] - df["bid"]).clip(lower=0)
-    df["spread_pct"] = np.where(df["ask"] > 0, df["spread"] / df["ask"] * 100, 100).round(2)
+    df["spread_pct"] = np.where(df["ask"] > 0, (df["spread"] / df["ask"]) * 100, 100).round(2)
 
     df["distance_from_spot_pct"] = np.where(
-        underlying_price > 0,
-        ((df["strike"] - underlying_price).abs() / underlying_price) * 100,
+        spot_price > 0,
+        ((df["strike"] - spot_price).abs() / spot_price) * 100,
         999.0,
     ).round(2)
 
     df["atm_flag"] = np.where(df["distance_from_spot_pct"] <= 1.0, "ATM", "")
 
-    midpoint = underlying_price if underlying_price > 0 else (df["strike"].median() if not df.empty else 0)
-    dist = (df["strike"] - midpoint).abs()
-    scaled = 1 - normalize(dist) / 100
+    midpoint = spot_price if spot_price > 0 else df["strike"].median()
+    strike_dist = (df["strike"] - midpoint).abs()
+    scaled = 1 - normalize(strike_dist) / 100
     scaled = scaled.clip(0.05, 0.95)
-
     df["delta"] = np.where(df["option_type"] == "Call", scaled, -scaled).round(2)
-    df["notional"] = (df["mid"] * 100).round(2)
 
     return df
 
 
-def add_trade_plan(side: pd.DataFrame):
-    side["entry_price"] = side["ask"].round(2)
-    side["stop_price"] = (side["ask"] * 0.75).round(2)
-    side["target_price"] = (side["ask"] * 1.40).round(2)
-
-    risk_per_contract = (side["entry_price"] - side["stop_price"]) * 100
-    reward_per_contract = (side["target_price"] - side["entry_price"]) * 100
-
-    side["risk_per_contract"] = risk_per_contract.round(2)
-    side["reward_per_contract"] = reward_per_contract.round(2)
-    side["rr_ratio"] = np.where(
-        side["risk_per_contract"] > 0,
-        side["reward_per_contract"] / side["risk_per_contract"],
+def add_trade_plan(df: pd.DataFrame):
+    df["entry_price"] = df["ask"].round(2)
+    df["stop_price"] = (df["ask"] * 0.75).round(2)
+    df["target_price"] = (df["ask"] * 1.40).round(2)
+    df["risk_per_contract"] = ((df["entry_price"] - df["stop_price"]) * 100).round(2)
+    df["reward_per_contract"] = ((df["target_price"] - df["entry_price"]) * 100).round(2)
+    df["rr_ratio"] = np.where(
+        df["risk_per_contract"] > 0,
+        df["reward_per_contract"] / df["risk_per_contract"],
         0,
     ).round(2)
+    return df
 
-    return side
 
-
-def score_options(df: pd.DataFrame, option_type: str, trend_strength: float, trend_label: str, capital: float):
+def score_options(df: pd.DataFrame, option_type: str, stock_ctx: dict, capital: float):
     side = df[df["option_type"] == option_type].copy()
-
     if side.empty:
         return side
 
-    liquidity = normalize(np.log1p(side["volume"]) + np.log1p(side["open_interest"]))
-    spread = 100 - normalize(side["spread_pct"])
-    atm_fit = 100 - normalize(side["distance_from_spot_pct"])
+    liquidity_score = normalize(np.log1p(side["volume"]) + np.log1p(side["open_interest"]))
+    spread_score = 100 - normalize(side["spread_pct"])
+    atm_score = 100 - normalize(side["distance_from_spot_pct"])
 
-    target = 0.35 if option_type == "Call" else -0.35
-    delta_fit = 100 - (abs(side["delta"] - target) / 0.35 * 100).clip(0, 100)
+    target_delta = 0.35 if option_type == "Call" else -0.35
+    delta_score = 100 - (abs(side["delta"] - target_delta) / 0.35 * 100).clip(0, 100)
 
-    side["score"] = (
-        liquidity * 0.35
-        + spread * 0.25
-        + delta_fit * 0.20
-        + atm_fit * 0.20
+    side["base_score"] = (
+        liquidity_score * 0.35
+        + spread_score * 0.25
+        + delta_score * 0.20
+        + atm_score * 0.20
     ).round(2)
 
+    trend_label = stock_ctx["trend_label"]
+    price = stock_ctx["price"]
+    vwap = stock_ctx["vwap"]
+    rsi = stock_ctx["rsi"]
+    rel_vol = stock_ctx["relative_volume"]
+
+    call_trend_ok = trend_label == "Bullish"
+    put_trend_ok = trend_label == "Bearish"
+    price_above_vwap = price > vwap if vwap else False
+    price_below_vwap = price < vwap if vwap else False
+    call_rsi_ok = 55 <= rsi <= 70 if rsi is not None else False
+    put_rsi_ok = 30 <= rsi <= 45 if rsi is not None else False
+    rel_vol_ok = rel_vol >= 1.2 if rel_vol is not None else False
+
+    if option_type == "Call":
+        side["trend_confirmation"] = call_trend_ok
+        side["vwap_confirmation"] = price_above_vwap
+        side["rsi_confirmation"] = call_rsi_ok
+    else:
+        side["trend_confirmation"] = put_trend_ok
+        side["vwap_confirmation"] = price_below_vwap
+        side["rsi_confirmation"] = put_rsi_ok
+
+    side["volume_confirmation"] = rel_vol_ok
+    side["spread_confirmation"] = side["spread_pct"] <= 12
+
+    side["confirmation_count"] = (
+        side["trend_confirmation"].astype(int)
+        + side["vwap_confirmation"].astype(int)
+        + side["rsi_confirmation"].astype(int)
+        + side["volume_confirmation"].astype(int)
+        + side["spread_confirmation"].astype(int)
+    )
+
     side["win_probability"] = (
-        side["score"] * 0.55
-        + liquidity * 0.15
-        + spread * 0.10
-        + atm_fit * 0.20
+        side["base_score"] * 0.55
+        + (side["confirmation_count"] / 5 * 100) * 0.45
     ).clip(5, 95).round(1)
 
-    trend_boost = trend_strength if option_type == "Call" else 100 - trend_strength
     side["confidence"] = (
-        side["score"] * 0.40
-        + side["win_probability"] * 0.30
-        + trend_boost * 0.30
+        side["base_score"] * 0.45
+        + side["win_probability"] * 0.35
+        + (side["confirmation_count"] / 5 * 100) * 0.20
     ).clip(5, 100).round(1)
-
-    trend_ok = ((option_type == "Call") and (trend_label == "Bullish")) or ((option_type == "Put") and (trend_label == "Bearish"))
-    side["trend_ok"] = trend_ok
 
     side["signal"] = np.select(
         [
-            (side["confidence"] >= 78) & (side["trend_ok"]) & (side["spread_pct"] <= 12),
-            (side["confidence"] >= 62) & (side["spread_pct"] <= 18),
+            (side["confirmation_count"] >= 5) & (side["confidence"] >= 78),
+            (side["confirmation_count"] >= 4) & (side["confidence"] >= 65),
+            (side["confirmation_count"] >= 3) & (side["confidence"] >= 55),
         ],
-        ["STRONG BUY", "BUY"],
-        default="AVOID",
+        ["STRONG BUY", "BUY", "WATCH"],
+        default="NO TRADE",
     )
 
-    side["contracts"] = side["ask"].apply(lambda x: calculate_position_size(capital, x, 100))
+    side["contracts"] = side["ask"].apply(lambda x: calculate_contracts(capital, x))
     side["position_cost"] = (side["contracts"] * side["ask"] * 100).round(2)
-    side["capital_used_pct"] = np.where(capital > 0, (side["position_cost"] / capital) * 100, 0).round(1)
+    side["capital_used_pct"] = np.where(
+        capital > 0,
+        (side["position_cost"] / capital) * 100,
+        0,
+    ).round(1)
 
     side = add_trade_plan(side)
 
-    side["reason"] = np.select(
-        [
-            side["signal"] == "STRONG BUY",
-            side["signal"] == "BUY",
-        ],
-        [
-            "Trend aligned, strong confidence, tight spread, good liquidity",
-            "Decent setup, but weaker than top tier",
-        ],
-        default="Weak setup or trend not aligned",
-    )
+    reasons = []
+    for _, row in side.iterrows():
+        pieces = []
+        if row["trend_confirmation"]:
+            pieces.append("trend agrees")
+        if row["vwap_confirmation"]:
+            pieces.append("price confirms direction")
+        if row["rsi_confirmation"]:
+            pieces.append("RSI looks healthy")
+        if row["volume_confirmation"]:
+            pieces.append("relative volume is strong")
+        if row["spread_confirmation"]:
+            pieces.append("spread is tight")
 
-    signal_order = {"STRONG BUY": 0, "BUY": 1, "AVOID": 2}
-    side["signal_rank"] = side["signal"].map(signal_order)
+        if not pieces:
+            reasons.append("Not enough confirmation")
+        else:
+            reasons.append(", ".join(pieces))
+
+    side["reason"] = reasons
+
+    order_map = {"STRONG BUY": 0, "BUY": 1, "WATCH": 2, "NO TRADE": 3}
+    side["signal_rank"] = side["signal"].map(order_map)
     side = side.sort_values(
-        ["signal_rank", "confidence", "score", "volume", "open_interest"],
+        ["signal_rank", "confidence", "base_score", "volume", "open_interest"],
         ascending=[True, False, False, False, False],
     )
+
     return side.drop(columns=["signal_rank"])
-
-
-def fetch_crypto_history(symbol: str):
-    ticker = yf.Ticker(symbol)
-    hist = ticker.history(period="30d", interval="1h")
-    return ticker, hist
-
-
-def score_crypto(hist: pd.DataFrame, symbol: str, capital: float):
-    if hist.empty or "Close" not in hist.columns:
-        return None, []
-
-    df = hist.copy()
-    df["ema9"] = df["Close"].ewm(span=9).mean()
-    df["ema21"] = df["Close"].ewm(span=21).mean()
-    df["ret_1"] = df["Close"].pct_change().fillna(0)
-    df["volatility"] = df["ret_1"].rolling(20).std().fillna(0)
-
-    last = df.iloc[-1]
-    price = float(last["Close"])
-    ema9 = float(last["ema9"])
-    ema21 = float(last["ema21"])
-    volume = float(last["Volume"]) if "Volume" in df.columns else 0.0
-
-    trend_label = "Bullish" if ema9 > ema21 else "Bearish" if ema9 < ema21 else "Neutral"
-    trend_strength = 80 if ema9 > ema21 else 20 if ema9 < ema21 else 50
-
-    momentum_score = 80 if price > ema9 > ema21 else 20 if price < ema9 < ema21 else 50
-    volatility_score = 100 - min(float(last["volatility"]) * 4000, 100)
-    volume_score = min((volume / max(df["Volume"].tail(20).mean(), 1)) * 50, 100) if "Volume" in df.columns else 50
-
-    confidence = round((trend_strength * 0.4) + (momentum_score * 0.35) + (volatility_score * 0.10) + (volume_score * 0.15), 1)
-
-    if confidence >= 78 and trend_label == "Bullish":
-        signal = "STRONG BUY"
-    elif confidence >= 62 and trend_label in ["Bullish", "Neutral"]:
-        signal = "BUY"
-    else:
-        signal = "AVOID"
-
-    entry_price = round(price, 2)
-    stop_price = round(price * 0.96, 2)
-    target_price = round(price * 1.08, 2)
-
-    risk_per_unit = round(entry_price - stop_price, 2)
-    reward_per_unit = round(target_price - entry_price, 2)
-    rr_ratio = round(reward_per_unit / risk_per_unit, 2) if risk_per_unit > 0 else 0
-
-    units = round(capital / entry_price, 6) if entry_price > 0 else 0
-    position_cost = round(units * entry_price, 2)
-
-    support = round(df["Low"].tail(20).min(), 2) if "Low" in df.columns else None
-    resistance = round(df["High"].tail(20).max(), 2) if "High" in df.columns else None
-
-    reason = (
-        "Bullish crypto trend with improving momentum"
-        if signal == "STRONG BUY"
-        else "Moderate crypto setup, watch risk"
-        if signal == "BUY"
-        else "Weak trend or low confidence"
-    )
-
-    result = {
-        "symbol": symbol,
-        "price": entry_price,
-        "trend_label": trend_label,
-        "confidence": confidence,
-        "signal": signal,
-        "entry_price": entry_price,
-        "stop_price": stop_price,
-        "target_price": target_price,
-        "risk_per_unit": risk_per_unit,
-        "reward_per_unit": reward_per_unit,
-        "rr_ratio": rr_ratio,
-        "units": units,
-        "position_cost": position_cost,
-        "support": support,
-        "resistance": resistance,
-        "reason": reason,
-        "volume": volume,
-    }
-
-    return result, df.tail(50)
 
 
 def signal_card_class(signal: str):
     if signal == "STRONG BUY":
-        return "signal-card-buy"
+        return "signal-card-strong"
     if signal == "BUY":
+        return "signal-card-buy"
+    if signal == "WATCH":
         return "signal-card-watch"
-    return "signal-card-avoid"
+    return "signal-card-no"
 
 
-def signal_badge(signal: str):
+def signal_emoji(signal: str):
     if signal == "STRONG BUY":
         return "🟢"
     if signal == "BUY":
         return "🟡"
+    if signal == "WATCH":
+        return "👀"
     return "🔴"
 
 
-def render_option_card(title: str, row):
+def render_trade_card(title: str, row):
     if row is None:
-        st.info(f"No {title.lower()} matched your filters.")
+        st.info(f"No {title.lower()} found.")
         return
 
     signal = row["signal"]
-    card_class = signal_card_class(signal)
-    badge = signal_badge(signal)
-
     st.markdown(
         f"""
-        <div class="{card_class}">
+        <div class="{signal_card_class(signal)}">
             <div class="card-title">{title}</div>
             <div class="card-main">
-                <div style="font-size:1.1rem;font-weight:800;margin-bottom:8px;">{badge} {row['symbol']}</div>
-                <div><strong>Signal:</strong> {signal}</div>
+                <div style="font-size:1.08rem;font-weight:800;margin-bottom:8px;">{signal_emoji(signal)} {row['symbol']}</div>
+                <div><strong>Signal:</strong> {row['signal']}</div>
                 <div><strong>Confidence:</strong> {row['confidence']:.1f}</div>
-                <div><strong>Score:</strong> {row['score']:.2f}</div>
                 <div><strong>Win %:</strong> {row['win_probability']:.1f}%</div>
                 <div><strong>Entry:</strong> ${row['entry_price']:.2f}</div>
                 <div><strong>Stop:</strong> ${row['stop_price']:.2f}</div>
                 <div><strong>Target:</strong> ${row['target_price']:.2f}</div>
-                <div><strong>R/R:</strong> {row['rr_ratio']:.2f}</div>
-                <div><strong>Contracts:</strong> {int(row['contracts'])}</div>
-                <div><strong>Total Cost:</strong> ${row['position_cost']:.2f}</div>
-                <div><strong>Reason:</strong> {row['reason']}</div>
+                <div><strong>Risk / Reward:</strong> {row['rr_ratio']:.2f}</div>
+                <div><strong>Contracts you can afford:</strong> {int(row['contracts'])}</div>
+                <div><strong>Total estimated cost:</strong> ${row['position_cost']:.2f}</div>
+                <div><strong>Why:</strong> {row['reason']}</div>
             </div>
         </div>
         """,
@@ -550,45 +498,15 @@ def render_option_card(title: str, row):
     )
 
 
-def render_crypto_card(title: str, row):
-    if row is None:
-        st.info(f"No {title.lower()} available.")
-        return
-
-    signal = row["signal"]
-    card_class = signal_card_class(signal)
-    badge = signal_badge(signal)
-
-    st.markdown(
-        f"""
-        <div class="{card_class}">
-            <div class="card-title">{title}</div>
-            <div class="card-main">
-                <div style="font-size:1.1rem;font-weight:800;margin-bottom:8px;">{badge} {row['symbol']}</div>
-                <div><strong>Signal:</strong> {signal}</div>
-                <div><strong>Trend:</strong> {row['trend_label']}</div>
-                <div><strong>Confidence:</strong> {row['confidence']:.1f}</div>
-                <div><strong>Entry:</strong> ${row['entry_price']:.2f}</div>
-                <div><strong>Stop:</strong> ${row['stop_price']:.2f}</div>
-                <div><strong>Target:</strong> ${row['target_price']:.2f}</div>
-                <div><strong>R/R:</strong> {row['rr_ratio']:.2f}</div>
-                <div><strong>Units:</strong> {row['units']}</div>
-                <div><strong>Total Cost:</strong> ${row['position_cost']:.2f}</div>
-                <div><strong>Reason:</strong> {row['reason']}</div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def style_signals(df: pd.DataFrame):
+def style_table(df: pd.DataFrame):
     def color_signal(val):
         if val == "STRONG BUY":
             return "background-color: rgba(0, 200, 0, 0.18); font-weight: 700;"
         if val == "BUY":
             return "background-color: rgba(255, 193, 7, 0.22); font-weight: 700;"
-        if val == "AVOID":
+        if val == "WATCH":
+            return "background-color: rgba(100, 116, 139, 0.28); font-weight: 700;"
+        if val == "NO TRADE":
             return "background-color: rgba(255, 0, 0, 0.16); font-weight: 700;"
         return ""
 
@@ -612,25 +530,21 @@ def style_signals(df: pd.DataFrame):
                 "Spread %": "{:.2f}%",
                 "Delta": "{:.2f}",
                 "IV": "{:.2%}",
-                "Distance %": "{:.2f}%",
                 "Score": "{:.2f}",
                 "Win %": "{:.1f}%",
                 "Confidence": "{:.1f}",
                 "Total Cost": "${:.2f}",
                 "Capital Used %": "{:.1f}%",
-                "Risk/Contract": "${:.2f}",
-                "Reward/Contract": "${:.2f}",
                 "R/R": "{:.2f}",
-                "Est. Cost": "${:.2f}",
             }
         )
     )
 
 
-def show_option_table(df: pd.DataFrame, title: str):
+def show_table(df: pd.DataFrame, title: str):
     st.subheader(title)
     if df.empty:
-        st.info("No contracts matched your filters.")
+        st.info("Nothing matched your filters.")
         return
 
     pretty = df[
@@ -640,9 +554,7 @@ def show_option_table(df: pd.DataFrame, title: str):
             "symbol",
             "strike",
             "expiration_date",
-            "bid",
             "ask",
-            "mid",
             "entry_price",
             "stop_price",
             "target_price",
@@ -651,18 +563,14 @@ def show_option_table(df: pd.DataFrame, title: str):
             "open_interest",
             "delta",
             "iv",
-            "distance_from_spot_pct",
-            "score",
+            "base_score",
             "win_probability",
             "confidence",
             "contracts",
             "position_cost",
             "capital_used_pct",
-            "risk_per_contract",
-            "reward_per_contract",
             "rr_ratio",
             "reason",
-            "notional",
         ]
     ].copy()
 
@@ -672,9 +580,7 @@ def show_option_table(df: pd.DataFrame, title: str):
         "Contract",
         "Strike",
         "Expiry",
-        "Bid",
         "Ask",
-        "Mid",
         "Entry",
         "Stop",
         "Target",
@@ -683,28 +589,24 @@ def show_option_table(df: pd.DataFrame, title: str):
         "Open Interest",
         "Delta",
         "IV",
-        "Distance %",
         "Score",
         "Win %",
         "Confidence",
         "Contracts",
         "Total Cost",
         "Capital Used %",
-        "Risk/Contract",
-        "Reward/Contract",
         "R/R",
-        "Reason",
-        "Est. Cost",
+        "Why",
     ]
 
-    st.dataframe(style_signals(pretty), width="stretch", hide_index=True)
+    st.dataframe(style_table(pretty), width="stretch", hide_index=True)
 
 
 st.markdown(
     """
     <div class="hero-box">
-        <div class="hero-title">📈 Options + Crypto Trade Dashboard</div>
-        <div class="hero-subtitle">One scanner for options setups and crypto spot setups.</div>
+        <div class="hero-title">📈 Beginner Options Dashboard</div>
+        <div class="hero-subtitle">A simple options scanner that explains whether a setup looks strong, weak, or not ready yet.</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -712,219 +614,152 @@ st.markdown(
 
 st.caption(APP_VERSION)
 
-main_tab1, main_tab2 = st.tabs(["Options Scanner", "Crypto Scanner"])
-
-with main_tab1:
-    left_top, right_top = st.columns([1.6, 1])
-    with left_top:
-        raw_symbol = st.text_input("Enter ticker (e.g. MSFT, TSLA, SPY)", "SPY", key="opt_symbol")
-    with right_top:
-        st.markdown(
-            "<div class='small-note' style='padding-top: 12px;'>Tip: type ticker symbols or common names like Microsoft, Tesla, or S&P500.</div>",
-            unsafe_allow_html=True,
-        )
-
-    raw_symbol, symbol = clean_symbol(raw_symbol)
-
-    if raw_symbol != symbol:
-        st.info(f"Using ticker symbol: {symbol}")
-
-    st.markdown("### Scanner Filters")
-    f1, f2, f3, f4 = st.columns(4)
-    with f1:
-        top_n = st.slider("Top contracts", 5, 25, 10, key="opt_top_n")
-    with f2:
-        min_volume = st.number_input("Minimum volume", min_value=0, value=50, step=10, key="opt_min_volume")
-    with f3:
-        min_oi = st.number_input("Minimum open interest", min_value=0, value=100, step=50, key="opt_min_oi")
-    with f4:
-        min_confidence = st.slider("Minimum confidence", 0, 100, 60, key="opt_min_conf")
-
-    max_spread_pct = st.slider("Maximum spread %", 1, 50, 15, key="opt_max_spread")
-
-    st.markdown("### 💰 Position Settings")
-    capital = st.number_input(
-        "How much are you investing ($)",
-        min_value=100,
-        value=1000,
-        step=100,
-        key="opt_capital",
+top_left, top_right = st.columns([1.6, 1])
+with top_left:
+    raw_symbol = st.text_input("Enter stock ticker or name", "SPY")
+with top_right:
+    st.markdown(
+        "<div class='help-note' style='padding-top:12px;'>Examples: SPY, QQQ, MSFT, NVDA, Tesla, Microsoft, S&P500</div>",
+        unsafe_allow_html=True,
     )
 
-    validated_ticker, is_valid = validate_ticker(symbol)
-    if not is_valid:
-        st.error(f"Invalid ticker: {symbol}. Try symbols like MSFT, TSLA, NVDA, SPY, or QQQ.")
+raw_symbol, symbol = clean_symbol(raw_symbol)
+
+if raw_symbol != symbol:
+    st.info(f"Using ticker symbol: {symbol}")
+
+st.markdown("### Basic Settings")
+s1, s2, s3, s4 = st.columns(4)
+with s1:
+    top_n = st.slider("How many ideas to show", 5, 25, 10)
+with s2:
+    min_volume = st.number_input("Minimum option volume", min_value=0, value=50, step=10)
+with s3:
+    min_oi = st.number_input("Minimum open interest", min_value=0, value=100, step=50)
+with s4:
+    max_spread_pct = st.slider("Maximum spread %", 1, 50, 15)
+
+st.markdown("### Money Settings")
+capital = st.number_input(
+    "How much money are you investing ($)",
+    min_value=100,
+    value=1000,
+    step=100,
+)
+
+validated_ticker, is_valid = validate_ticker(symbol)
+if not is_valid:
+    st.error(f"Invalid ticker: {symbol}. Try SPY, QQQ, MSFT, TSLA, NVDA, or AAPL.")
+    st.stop()
+
+try:
+    ticker = validated_ticker
+    expirations = fetch_expirations(symbol)
+    stock_ctx = get_stock_context(ticker)
+    spot_price = stock_ctx["price"] if stock_ctx["price"] > 0 else get_spot_price(ticker)
+except Exception as e:
+    st.error(f"Could not load stock data for {symbol}: {e}")
+    st.stop()
+
+if not expirations:
+    st.error(f"No options found for {symbol}.")
+    st.stop()
+
+expiry = st.selectbox("Choose expiration", expirations)
+
+try:
+    raw_chain = fetch_chain(symbol, expiry)
+    chain_df = clean_chain_df(raw_chain, expiry, spot_price)
+except Exception as e:
+    st.error(f"Could not load options chain: {e}")
+    st.stop()
+
+filtered = chain_df[
+    (chain_df["volume"] >= min_volume)
+    & (chain_df["open_interest"] >= min_oi)
+    & (chain_df["spread_pct"] <= max_spread_pct)
+].copy()
+
+calls_scored = score_options(filtered, "Call", stock_ctx, capital)
+puts_scored = score_options(filtered, "Put", stock_ctx, capital)
+
+calls = calls_scored.head(top_n)
+puts = puts_scored.head(top_n)
+all_scored = pd.concat([calls_scored, puts_scored], ignore_index=True)
+
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Stock", symbol)
+m2.metric("Stock Price", f"${spot_price:,.2f}" if spot_price else "N/A")
+m3.metric("Trend", stock_ctx["trend_label"])
+actionable_count = int(all_scored["signal"].isin(["STRONG BUY", "BUY"]).sum()) if not all_scored.empty else 0
+m4.metric("Good Setups", actionable_count)
+
+i1, i2, i3, i4 = st.columns(4)
+with i1:
+    st.markdown(
+        f"<div class='simple-card'><div class='simple-label'>RSI</div><div class='simple-value'>{stock_ctx['rsi']:.1f if stock_ctx['rsi'] is not None else 'N/A'}</div></div>",
+        unsafe_allow_html=True,
+    )
+with i2:
+    vwap_text = f"${stock_ctx['vwap']:.2f}" if stock_ctx["vwap"] is not None else "N/A"
+    st.markdown(
+        f"<div class='simple-card'><div class='simple-label'>VWAP</div><div class='simple-value'>{vwap_text}</div></div>",
+        unsafe_allow_html=True,
+    )
+with i3:
+    rel_vol_text = f"{stock_ctx['relative_volume']:.2f}x" if stock_ctx["relative_volume"] is not None else "N/A"
+    st.markdown(
+        f"<div class='simple-card'><div class='simple-label'>Relative Volume</div><div class='simple-value'>{rel_vol_text}</div></div>",
+        unsafe_allow_html=True,
+    )
+with i4:
+    st.markdown(
+        f"<div class='simple-card'><div class='simple-label'>Expiration</div><div class='simple-value'>{expiry}</div></div>",
+        unsafe_allow_html=True,
+    )
+
+j1, j2 = st.columns(2)
+with j1:
+    support_text = f"${stock_ctx['support']:.2f}" if stock_ctx["support"] is not None else "N/A"
+    st.markdown(
+        f"<div class='simple-card'><div class='simple-label'>Support</div><div class='simple-value'>{support_text}</div></div>",
+        unsafe_allow_html=True,
+    )
+with j2:
+    resistance_text = f"${stock_ctx['resistance']:.2f}" if stock_ctx["resistance"] is not None else "N/A"
+    st.markdown(
+        f"<div class='simple-card'><div class='simple-label'>Resistance</div><div class='simple-value'>{resistance_text}</div></div>",
+        unsafe_allow_html=True,
+    )
+
+if all_scored.empty:
+    st.warning("No trades matched your filters. Try lowering your filters or switching tickers.")
+elif actionable_count == 0:
+    st.warning("No strong trade right now. The dashboard thinks it may be better to wait.")
+else:
+    st.success("Good — the scanner found setups with enough confirmation to review.")
+
+c1, c2 = st.columns(2)
+with c1:
+    render_trade_card("Best Call Idea", calls.iloc[0] if not calls.empty else None)
+with c2:
+    render_trade_card("Best Put Idea", puts.iloc[0] if not puts.empty else None)
+
+st.info(
+    "Beginner guide: STRONG BUY means most important conditions agree. BUY means decent setup. WATCH means not ready yet. NO TRADE means the chart and contract do not line up well enough."
+)
+
+tab1, tab2, tab3 = st.tabs(["Top Calls", "Top Puts", "ATM Contracts"])
+
+with tab1:
+    show_table(calls, f"Top Call Contracts for {symbol} {expiry}")
+
+with tab2:
+    show_table(puts, f"Top Put Contracts for {symbol} {expiry}")
+
+with tab3:
+    atm_df = all_scored[all_scored["atm_flag"] == "ATM"].copy()
+    if atm_df.empty:
+        st.info("No ATM contracts matched your filters.")
     else:
-        try:
-            ticker, expirations = fetch_data(symbol)
-            underlying_price = get_underlying_price(validated_ticker)
-            trend = get_trend_context(validated_ticker)
-            trend_strength = trend["trend_strength"]
-            trend_label = trend["trend_label"]
-        except Exception as e:
-            st.error(f"Could not load market data for {symbol}: {e}")
-            st.stop()
-
-        if not expirations:
-            st.error(f"No options found for ticker: {symbol}")
-        else:
-            expiry = st.selectbox("Expiration", expirations, key="opt_expiry")
-
-            try:
-                chain = fetch_chain(symbol, expiry)
-                df = clean_df(chain, expiry, underlying_price)
-            except Exception as e:
-                st.error(f"Could not load option chain: {e}")
-                st.stop()
-
-            filtered = df[
-                (df["volume"] >= min_volume)
-                & (df["open_interest"] >= min_oi)
-                & (df["spread_pct"] <= max_spread_pct)
-            ].copy()
-
-            calls_scored = score_options(filtered, "Call", trend_strength, trend_label, capital)
-            puts_scored = score_options(filtered, "Put", trend_strength, trend_label, capital)
-
-            calls_scored = calls_scored[calls_scored["confidence"] >= min_confidence]
-            puts_scored = puts_scored[puts_scored["confidence"] >= min_confidence]
-
-            calls = calls_scored.head(top_n)
-            puts = puts_scored.head(top_n)
-
-            scored_all = pd.concat([calls_scored, puts_scored], ignore_index=True)
-
-            m1, m2, m3, m4 = st.columns(4)
-            actionable_count = int(scored_all["signal"].isin(["STRONG BUY", "BUY"]).sum()) if not scored_all.empty else 0
-            m1.metric("Underlying", symbol)
-            m2.metric("Spot Price", f"${underlying_price:,.2f}" if underlying_price else "N/A")
-            m3.metric("Trend Bias", trend_label)
-            m4.metric("Actionable Signals", f"{actionable_count}")
-
-            i1, i2, i3 = st.columns(3)
-            with i1:
-                support_txt = f"${trend['support']:.2f}" if trend["support"] is not None else "N/A"
-                st.markdown(
-                    f"<div class='info-card'><div class='info-label'>Support</div><div class='info-value'>{support_txt}</div></div>",
-                    unsafe_allow_html=True,
-                )
-            with i2:
-                resistance_txt = f"${trend['resistance']:.2f}" if trend["resistance"] is not None else "N/A"
-                st.markdown(
-                    f"<div class='info-card'><div class='info-label'>Resistance</div><div class='info-value'>{resistance_txt}</div></div>",
-                    unsafe_allow_html=True,
-                )
-            with i3:
-                st.markdown(
-                    f"<div class='info-card'><div class='info-label'>Selected Expiration</div><div class='info-value'>{expiry}</div></div>",
-                    unsafe_allow_html=True,
-                )
-
-            if scored_all.empty or actionable_count == 0:
-                st.warning("⚠️ No strong options setup right now. Best move may be no trade.")
-            else:
-                st.success("✅ Tradeable options setups found based on your filters and current trend.")
-
-            c1, c2 = st.columns(2)
-            with c1:
-                render_option_card("Best Call", calls.iloc[0] if not calls.empty else None)
-            with c2:
-                render_option_card("Best Put", puts.iloc[0] if not puts.empty else None)
-
-            st.info(
-                "Trend confirmation checks whether calls align with a bullish trend and puts align with a bearish trend. Entry, stop, and target are model-based planning levels, not guarantees."
-            )
-
-            tab1, tab2, tab3 = st.tabs(["Top Calls", "Top Puts", "ATM Snapshot"])
-
-            with tab1:
-                show_option_table(calls, f"Top Call Contracts for {symbol} {expiry}")
-
-            with tab2:
-                show_option_table(puts, f"Top Put Contracts for {symbol} {expiry}")
-
-            with tab3:
-                atm_df = scored_all[scored_all["atm_flag"] == "ATM"].copy()
-                if atm_df.empty:
-                    st.info("No ATM contracts matched the current filters.")
-                else:
-                    show_option_table(atm_df.head(20), f"ATM Contracts for {symbol} {expiry}")
-
-with main_tab2:
-    left_top, right_top = st.columns([1.6, 1])
-    with left_top:
-        raw_crypto = st.text_input("Enter crypto (e.g. BTC, ETH, SOL, BTC-USD)", "BTC-USD", key="crypto_symbol")
-    with right_top:
-        st.markdown(
-            "<div class='small-note' style='padding-top: 12px;'>Tip: you can type Bitcoin, BTC, Ethereum, ETH, Solana, or SOL.</div>",
-            unsafe_allow_html=True,
-        )
-
-    raw_crypto, crypto_symbol = clean_crypto_symbol(raw_crypto)
-
-    if raw_crypto != crypto_symbol:
-        st.info(f"Using crypto symbol: {crypto_symbol}")
-
-    st.markdown("### Crypto Settings")
-    cset1, cset2 = st.columns(2)
-    with cset1:
-        crypto_capital = st.number_input(
-            "How much are you investing in crypto ($)",
-            min_value=50,
-            value=1000,
-            step=50,
-            key="crypto_capital",
-        )
-    with cset2:
-        crypto_min_conf = st.slider("Minimum crypto confidence", 0, 100, 60, key="crypto_min_conf")
-
-    crypto_ticker, crypto_valid = validate_ticker(crypto_symbol)
-    if not crypto_valid:
-        st.error(f"Invalid crypto symbol: {crypto_symbol}. Try BTC-USD, ETH-USD, SOL-USD, or ADA-USD.")
-    else:
-        try:
-            crypto_ticker, crypto_hist = fetch_crypto_history(crypto_symbol)
-            crypto_result, crypto_recent = score_crypto(crypto_hist, crypto_symbol, crypto_capital)
-        except Exception as e:
-            st.error(f"Could not load crypto data: {e}")
-            st.stop()
-
-        if crypto_result is None:
-            st.warning("No crypto data available right now.")
-        else:
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Crypto", crypto_symbol)
-            m2.metric("Spot Price", f"${crypto_result['price']:,.2f}")
-            m3.metric("Trend Bias", crypto_result["trend_label"])
-            m4.metric("Signal", crypto_result["signal"])
-
-            i1, i2, i3 = st.columns(3)
-            with i1:
-                support_txt = f"${crypto_result['support']:,.2f}" if crypto_result["support"] is not None else "N/A"
-                st.markdown(
-                    f"<div class='info-card'><div class='info-label'>Support</div><div class='info-value'>{support_txt}</div></div>",
-                    unsafe_allow_html=True,
-                )
-            with i2:
-                resistance_txt = f"${crypto_result['resistance']:,.2f}" if crypto_result["resistance"] is not None else "N/A"
-                st.markdown(
-                    f"<div class='info-card'><div class='info-label'>Resistance</div><div class='info-value'>{resistance_txt}</div></div>",
-                    unsafe_allow_html=True,
-                )
-            with i3:
-                st.markdown(
-                    f"<div class='info-card'><div class='info-label'>Confidence</div><div class='info-value'>{crypto_result['confidence']:.1f}</div></div>",
-                    unsafe_allow_html=True,
-                )
-
-            if crypto_result["confidence"] < crypto_min_conf or crypto_result["signal"] == "AVOID":
-                st.warning("⚠️ No strong crypto setup right now. Best move may be no trade.")
-            else:
-                st.success("✅ Tradeable crypto setup found.")
-
-            render_crypto_card("Best Crypto Setup", crypto_result)
-
-            st.subheader("Recent Crypto Prices")
-            if crypto_recent is not None and not crypto_recent.empty:
-                chart_df = crypto_recent[["Close"]].copy()
-                st.line_chart(chart_df, height=300)
+        show_table(atm_df.head(20), f"ATM Contracts for {symbol} {expiry}")
