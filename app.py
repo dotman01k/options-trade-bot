@@ -5,7 +5,7 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 
-st.set_page_config(page_title="Beginner Options Dashboard", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Dotun's Options Dashboard", page_icon="📈", layout="wide")
 
 APP_VERSION = "v9 beginner-friendly confirmation dashboard"
 
