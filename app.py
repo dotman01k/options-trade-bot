@@ -8,7 +8,7 @@ import yfinance as yf
 
 st.set_page_config(page_title="Beginner Options Dashboard", page_icon="📈", layout="wide")
 
-APP_VERSION = "v11 beginner dashboard + market scanner + possible earnings"
+APP_VERSION = "v12 beginner dashboard + market scanner top 100"
 
 st.markdown(
     """
@@ -108,6 +108,9 @@ st.markdown(
 )
 
 
+# -----------------------------
+# Helpers
+# -----------------------------
 def safe_float(value, default=0.0):
     try:
         if value in (None, ""):
@@ -163,6 +166,8 @@ def clean_symbol(user_input: str):
         "COIN": "COIN",
         "PALANTIR": "PLTR",
         "PLTR": "PLTR",
+        "BERKSHIRE": "BRK-B",
+        "BERKSHIRE HATHAWAY": "BRK-B",
     }
     raw = (user_input or "").upper().strip()
     cleaned = raw.replace("$", "").strip()
@@ -293,7 +298,6 @@ def clean_chain_df(df: pd.DataFrame, expiration: str, spot_price: float):
             df[col] = 0
 
     df["expiration_date"] = expiration
-
     df["mid"] = np.where(
         (df["bid"] > 0) & (df["ask"] > 0),
         (df["bid"] + df["ask"]) / 2,
@@ -610,6 +614,7 @@ def show_table(df: pd.DataFrame, title: str):
     st.dataframe(style_table(pretty), width="stretch", hide_index=True)
 
 
+@st.cache_data(ttl=900, show_spinner=False)
 def get_best_setup_for_symbol(symbol: str, capital: float, max_spread_pct: int):
     validated_ticker, is_valid = validate_ticker(symbol)
     if not is_valid:
@@ -652,17 +657,46 @@ def get_best_setup_for_symbol(symbol: str, capital: float, max_spread_pct: int):
         best["stock_symbol"] = symbol
         best["trend"] = stock_ctx["trend_label"]
         best["spot_price"] = spot_price
-        return best
+        return best.to_dict()
 
     except Exception:
         return None
 
 
+# -----------------------------
+# Universe presets
+# -----------------------------
+TOP_100_UNIVERSE = [
+    "SPY","QQQ","DIA","IWM","AAPL","MSFT","NVDA","TSLA","AMZN","META",
+    "GOOGL","AMD","NFLX","COIN","PLTR","AVGO","TSM","MU","INTC","ORCL",
+    "CRM","ADBE","UBER","SHOP","SNOW","JPM","BAC","GS","MS","WFC",
+    "C","XOM","CVX","SLB","COP","OXY","BA","GE","CAT","DE",
+    "HON","RTX","LMT","UNH","LLY","JNJ","PFE","MRK","ABBV","TMO",
+    "WMT","COST","HD","LOW","TGT","NKE","SBUX","MCD","DIS","PYPL",
+    "SQ","AFRM","HOOD","SOFI","F","GM","RIVN","LCID","PANW","CRWD",
+    "ZS","NET","DDOG","MDB","BKNG","ABNB","LYFT","KO","PEP","PG",
+    "CL","IBM","CSCO","QCOM","AMAT","LRCX","KLAC","ASML","SMCI","ARM",
+    "ANET","MSTR","RIOT","MARA","ETSY","ROKU","DOCU","ZM","CVNA","BRK-B"
+]
+
+SECTOR_PRESETS = {
+    "Top 100": TOP_100_UNIVERSE,
+    "Big Tech": ["AAPL","MSFT","NVDA","AMZN","META","GOOGL","TSLA","NFLX","AVGO","AMD","ORCL","ADBE","CRM","CSCO","QCOM"],
+    "Index ETFs": ["SPY","QQQ","DIA","IWM"],
+    "Finance": ["JPM","BAC","GS","MS","WFC","C","BRK-B","COF","AXP","BLK"],
+    "Energy": ["XOM","CVX","SLB","COP","OXY","MPC","PSX","EOG","HAL","VLO"],
+    "Semis": ["NVDA","AMD","AVGO","TSM","MU","INTC","QCOM","AMAT","LRCX","KLAC","ASML","ARM","SMCI"],
+}
+
+
+# -----------------------------
+# UI
+# -----------------------------
 st.markdown(
     """
     <div class="hero-box">
         <div class="hero-title">📈 Beginner Options Dashboard</div>
-        <div class="hero-subtitle">A simple options scanner for one stock and a market scanner for top opportunities.</div>
+        <div class="hero-subtitle">A simple options scanner for one stock and a market scanner that can rank up to 100 stocks.</div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -828,19 +862,37 @@ with page1:
 with page2:
     st.markdown("### Market Scanner")
     st.markdown(
-        "<div class='help-note'>This scans a watchlist of liquid option stocks and ranks the top 5 opportunities. With free Yahoo data, this is the best practical version of a whole market scan.</div>",
+        "<div class='help-note'>This scans a large watchlist and returns one best setup per stock. Then it ranks them and shows the top results.</div>",
         unsafe_allow_html=True,
     )
 
-    default_watchlist = "SPY, QQQ, AAPL, MSFT, NVDA, TSLA, AMZN, META, GOOGL, AMD, NFLX, COIN, PLTR"
-    watchlist_input = st.text_area("Stocks to scan", value=default_watchlist, height=90)
-    scan_capital = st.number_input("Capital to size each idea ($)", min_value=100, value=1000, step=100, key="scan_capital")
-    scan_spread = st.slider("Scanner max spread %", 1, 50, 15, key="scan_spread")
+    preset_name = st.selectbox("Choose stock universe", list(SECTOR_PRESETS.keys()), index=0)
+    default_watchlist = ",".join(SECTOR_PRESETS[preset_name])
+
+    watchlist_input = st.text_area(
+        "Stocks to scan",
+        value=default_watchlist,
+        height=140,
+        key=f"watchlist_{preset_name}",
+    )
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        scan_capital = st.number_input("Capital to size each idea ($)", min_value=100, value=1000, step=100, key="scan_capital")
+    with c2:
+        scan_spread = st.slider("Scanner max spread %", 1, 50, 15, key="scan_spread")
+    with c3:
+        top_market_results = st.slider("How many results to show", 5, 100, 25, key="market_top_n")
+
     run_scan = st.button("Run Market Scan")
 
     if run_scan:
         raw_symbols = [x.strip() for x in watchlist_input.split(",") if x.strip()]
         symbols = [clean_symbol(x)[1] for x in raw_symbols]
+
+        if len(symbols) > 100:
+            symbols = symbols[:100]
+            st.info("Scanner is limited to the first 100 stocks for performance.")
 
         results = []
         progress = st.progress(0)
@@ -852,7 +904,7 @@ with page2:
             if result is not None:
                 results.append(result)
             progress.progress((i + 1) / len(symbols))
-            time.sleep(0.1)
+            time.sleep(0.05)
 
         status.empty()
 
@@ -868,12 +920,30 @@ with page2:
                 ascending=[True, False, False, False],
             )
 
+            top_results = market_df.head(top_market_results).copy()
             top5 = market_df.head(5).copy()
 
-            st.success("Scan complete. Here are the top 5 options stocks to review.")
+            st.success(f"Scan complete. Showing top {len(top_results)} ranked results.")
 
-            st.subheader("Top 5 Options Stocks to Buy")
-            display_df = top5[
+            top_metrics = st.columns(4)
+            actionable = int(top_results["signal"].isin(["STRONG BUY", "BUY"]).sum())
+            strong_buys = int(top_results["signal"].eq("STRONG BUY").sum())
+            avg_conf = float(top_results["confidence"].mean()) if not top_results.empty else 0
+            avg_win = float(top_results["win_probability"].mean()) if not top_results.empty else 0
+
+            top_metrics[0].metric("Stocks Scanned", len(symbols))
+            top_metrics[1].metric("Results Shown", len(top_results))
+            top_metrics[2].metric("Strong Buy Count", strong_buys)
+            top_metrics[3].metric("Avg Confidence", f"{avg_conf:.1f}")
+
+            st.markdown("### Top 5 Summary Cards")
+            card_cols = st.columns(5)
+            for idx, (_, row) in enumerate(top5.iterrows()):
+                with card_cols[idx]:
+                    render_trade_card(f"#{idx+1} {row['stock_symbol']}", row)
+
+            st.markdown("### Ranked Market Results")
+            display_df = top_results[
                 [
                     "stock_symbol",
                     "option_type",
@@ -922,5 +992,5 @@ with page2:
             st.dataframe(display_df, width="stretch", hide_index=True)
 
             st.markdown("### Best Overall Setup")
-            best = top5.iloc[0]
+            best = top_results.iloc[0]
             render_trade_card("Top Market Setup", best)
