@@ -8,7 +8,7 @@ import yfinance as yf
 
 st.set_page_config(page_title="Beginner Options Dashboard", page_icon="📈", layout="wide")
 
-APP_VERSION = "v12 beginner dashboard + market scanner top 100"
+APP_VERSION = "v13 beginner dashboard + market scanner + smart filter fallback"
 
 st.markdown(
     """
@@ -455,6 +455,26 @@ def score_options(df: pd.DataFrame, option_type: str, stock_ctx: dict, capital: 
     return side.drop(columns=["signal_rank"])
 
 
+def apply_filters_with_fallback(chain_df, min_volume, min_oi, max_spread_pct):
+    filtered = chain_df[
+        (chain_df["volume"] >= min_volume)
+        & (chain_df["open_interest"] >= min_oi)
+        & (chain_df["spread_pct"] <= max_spread_pct)
+    ].copy()
+
+    fallback_used = False
+
+    if filtered.empty:
+        filtered = chain_df[
+            (chain_df["volume"] >= 1)
+            & (chain_df["open_interest"] >= 10)
+            & (chain_df["spread_pct"] <= 30)
+        ].copy()
+        fallback_used = True
+
+    return filtered, fallback_used
+
+
 def signal_card_class(signal: str):
     if signal == "STRONG BUY":
         return "signal-card-strong"
@@ -490,7 +510,7 @@ def render_trade_card(title: str, row):
                 <div><strong>Signal:</strong> {row['signal']}</div>
                 <div><strong>Confidence:</strong> {row['confidence']:.1f}</div>
                 <div><strong>Win %:</strong> {row['win_probability']:.1f}%</div>
-                <div><strong>Entry:</strong> ${row['entry_price']:.2f}</div>
+                <div><strong>Buy Price:</strong> ${row['entry_price']:.2f}</div>
                 <div><strong>Stop:</strong> ${row['stop_price']:.2f}</div>
                 <div><strong>Target:</strong> ${row['target_price']:.2f}</div>
                 <div><strong>Risk / Reward:</strong> {row['rr_ratio']:.2f}</div>
@@ -530,7 +550,7 @@ def style_table(df: pd.DataFrame):
         .format(
             {
                 "Ask": "${:.2f}",
-                "Entry": "${:.2f}",
+                "Buy Price": "${:.2f}",
                 "Stop": "${:.2f}",
                 "Target": "${:.2f}",
                 "Spread %": "{:.2f}%",
@@ -591,7 +611,7 @@ def show_table(df: pd.DataFrame, title: str):
         "Strike",
         "Expiry",
         "Ask",
-        "Entry",
+        "Buy Price",
         "Stop",
         "Target",
         "Spread %",
@@ -638,6 +658,13 @@ def get_best_setup_for_symbol(symbol: str, capital: float, max_spread_pct: int):
             & (chain_df["open_interest"] >= 100)
             & (chain_df["spread_pct"] <= max_spread_pct)
         ].copy()
+
+        if filtered.empty:
+            filtered = chain_df[
+                (chain_df["volume"] >= 1)
+                & (chain_df["open_interest"] >= 10)
+                & (chain_df["spread_pct"] <= 30)
+            ].copy()
 
         calls_scored = score_options(filtered, "Call", stock_ctx, capital)
         puts_scored = score_options(filtered, "Put", stock_ctx, capital)
@@ -767,11 +794,27 @@ with page1:
         st.error(f"Could not load options chain: {e}")
         st.stop()
 
-    filtered = chain_df[
-        (chain_df["volume"] >= min_volume)
-        & (chain_df["open_interest"] >= min_oi)
-        & (chain_df["spread_pct"] <= max_spread_pct)
-    ].copy()
+    contracts_before_filters = len(chain_df)
+
+    filtered, fallback_used = apply_filters_with_fallback(
+        chain_df,
+        min_volume=min_volume,
+        min_oi=min_oi,
+        max_spread_pct=max_spread_pct,
+    )
+
+    contracts_after_filters = len(filtered)
+
+    d1, d2 = st.columns(2)
+    with d1:
+        st.metric("Contracts before filters", contracts_before_filters)
+    with d2:
+        st.metric("Contracts after filters", contracts_after_filters)
+
+    if fallback_used:
+        st.warning(
+            "Your original filters were too strict, so the app automatically relaxed them to help you see possible setups."
+        )
 
     calls_scored = score_options(filtered, "Call", stock_ctx, capital)
     puts_scored = score_options(filtered, "Put", stock_ctx, capital)
@@ -828,7 +871,7 @@ with page1:
         )
 
     if all_scored.empty:
-        st.warning("No trades matched your filters. Try lowering your filters or switching tickers.")
+        st.warning("No trades matched even the relaxed filters. Try a more liquid ticker like SPY, QQQ, AAPL, MSFT, or NVDA.")
     elif actionable_count == 0:
         st.warning("No strong trade right now. The dashboard thinks it may be better to wait.")
     else:
@@ -926,10 +969,8 @@ with page2:
             st.success(f"Scan complete. Showing top {len(top_results)} ranked results.")
 
             top_metrics = st.columns(4)
-            actionable = int(top_results["signal"].isin(["STRONG BUY", "BUY"]).sum())
             strong_buys = int(top_results["signal"].eq("STRONG BUY").sum())
             avg_conf = float(top_results["confidence"].mean()) if not top_results.empty else 0
-            avg_win = float(top_results["win_probability"].mean()) if not top_results.empty else 0
 
             top_metrics[0].metric("Stocks Scanned", len(symbols))
             top_metrics[1].metric("Results Shown", len(top_results))
@@ -978,7 +1019,7 @@ with page2:
                 "Option Contract",
                 "Strike",
                 "Expiry",
-                "Entry",
+                "Buy Price",
                 "Stop",
                 "Target",
                 "Contracts",
